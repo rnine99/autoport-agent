@@ -1,0 +1,98 @@
+# =============================================================================
+# INFRASTRUCTURE CONFIGURATION
+# =============================================================================
+# This file contains infrastructure settings for the server, Redis, background
+# tasks, logging, and CORS. Tool-specific settings (crawler, web_fetch, embedding,
+# search_api) have been moved to agent_config.yaml.
+
+# CLI Configuration
+cli:
+  # Color palette: emerald, cyan, amber, teal, nord, gruvbox, catppuccin, tokyo_night
+  # Default: nord (dark mode), tokyo_night (light mode)
+  # palette: "nord"
+  # Theme mode: auto, dark, light
+  theme: "auto"
+
+# Application Settings
+debug: false
+agent_recursion_limit: 100
+
+# Workflow Settings
+workflow_timeout: 3200  # seconds (53 minutes)
+sse_keepalive_interval: 15  # seconds
+
+# Feature Flags
+result_log_db_enabled: true
+redis_warm_on_startup: true
+langsmith_tracing: false
+
+# SSE Event Logging
+sse_event_log_enabled: true
+sse_event_log_level: info
+
+# General Application Logging
+log_level: info
+log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Module-specific log levels (overrides root level)
+module_log_levels:
+  # Grouped library settings (use group: prefix for predefined groups)
+  group:third_party_libraries: WARNING
+  group:langchain_libraries: WARNING
+
+  # Application modules (hierarchical - parent loggers affect all children)
+  src.tools: INFO
+  src.infoflow: INFO
+  src.deep_research: INFO
+
+# CORS Settings
+allowed_origins:
+  - "*"
+
+
+# =============================================================================
+# BACKGROUND EXECUTION CONFIGURATION
+# =============================================================================
+# REQUIRED: Background execution is always enabled to ensure workflows complete
+# even if SSE clients disconnect. These settings control background task behavior.
+background_execution:
+  max_concurrent_workflows: 100  # Maximum number of concurrent background workflows
+  workflow_result_ttl: 86400  # Workflow result retention time in seconds (24 hours)
+  abandoned_workflow_timeout: 3600  # Auto-cleanup timeout for workflows with no active connections (1 hour)
+  cleanup_interval: 300  # Background cleanup task interval in seconds (5 minutes)
+  enable_intermediate_storage: true  # Store intermediate results during execution
+  max_stored_messages_per_agent: 150000  # Maximum events to buffer per workflow (increased for long-running research)
+
+  # Event storage backend configuration
+  event_storage_backend: redis  # Backend for event buffering: "redis" or "memory"
+  event_storage_fallback_to_memory: true  # Fallback to in-memory storage if Redis fails
+
+
+# =============================================================================
+# REDIS CACHE CONFIGURATION
+# =============================================================================
+# Connection details (URL with credentials) are in .env: REDIS_URL
+# Redis is used for caching and background workflow event storage
+redis:
+  cache_enabled: true  # Enable/disable caching globally
+  max_connections: 10  # Connection pool size
+
+  # Cache TTL settings (seconds)
+  ttl:
+    results_list: 300  # Results list cache TTL (5 minutes)
+    result_detail: 900  # Result detail cache TTL (15 minutes)
+    metadata: 900  # Metadata tags/tickers cache TTL (15 minutes)
+    metadata_summary: 600  # Metadata summary cache TTL (10 minutes)
+    workflow_events: 86400  # Workflow event buffer TTL (24 hours)
+
+  # Cache Invalidation
+  cache_invalidate_on_write: true  # Invalidate cache on writes
+
+  # Stale-While-Revalidate (SWR) Configuration
+  # SWR returns stale data immediately while refreshing in background
+  swr:
+    enabled: true  # Enable SWR for cache reads
+    soft_ttl_ratio: 0.6  # Refresh when remaining TTL < 60% of original (e.g., at 3 min for 5 min TTL)
+    warm_after_invalidation: true  # Pre-populate cache after invalidation
+
+

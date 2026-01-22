@@ -19,6 +19,9 @@ class WorkspaceThreadListItem(BaseModel):
     thread_index: int = Field(..., description="Thread index within workspace")
     current_status: str = Field(..., description="Thread status")
     msg_type: Optional[str] = Field(None, description="Message type")
+    first_query_content: Optional[str] = Field(
+        None, description="First user query content (preview)"
+    )
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
@@ -157,8 +160,8 @@ class MessageResponse(BaseModel):
     )
 
 
-class WorkspaceMessage(BaseModel):
-    """A single message pair in a workspace (query + response)."""
+class ConversationMessage(BaseModel):
+    """A single message pair in a conversation/thread (query + response)."""
     pair_index: int = Field(..., description="Pair index within thread (0-based)")
     thread_id: str = Field(..., description="Thread ID (internal reference)")
     thread_index: int = Field(..., description="Thread index within workspace (0-based)")
@@ -171,7 +174,7 @@ class WorkspaceMessagesResponse(BaseModel):
     workspace_id: str = Field(..., description="Workspace ID")
     user_id: str = Field(..., description="User ID")
     name: Optional[str] = Field(None, description="Workspace name")
-    messages: List[WorkspaceMessage] = Field(default_factory=list, description="All messages chronologically")
+    messages: List[ConversationMessage] = Field(default_factory=list, description="All messages chronologically")
     total_messages: int = Field(0, description="Total message count")
     has_more: bool = Field(False, description="Whether more messages are available")
     created_at: datetime = Field(..., description="Creation timestamp")
@@ -210,7 +213,3 @@ class WorkspaceMessagesResponse(BaseModel):
             }
         }
 
-
-# Backwards compatibility aliases (deprecated)
-ConversationMessage = WorkspaceMessage
-ConversationMessagesResponse = WorkspaceMessagesResponse

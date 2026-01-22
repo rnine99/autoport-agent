@@ -177,6 +177,59 @@ class SSEStreamClient:
         return response.json()
 
     # =========================================================================
+    # Conversations
+    # =========================================================================
+
+    async def list_conversations(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+    ) -> Dict[str, Any]:
+        """List conversations (threads) for the current user."""
+        url = urljoin(self.base_url, "/api/v1/conversations")
+        response = await self.client.get(
+            url,
+            headers={"X-User-Id": self.user_id},
+            params={
+                "limit": limit,
+                "offset": offset,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def replay_thread(self, thread_id: str) -> AsyncGenerator[tuple[str, Dict[str, Any]], None]:
+        """Replay a completed thread from persisted streaming chunks."""
+        url = urljoin(self.base_url, f"/api/v1/threads/{thread_id}/replay")
+
+        async with self.client.stream(
+            "GET",
+            url,
+            headers={"Accept": "text/event-stream"},
+            timeout=self.timeout,
+        ) as response:
+            response.raise_for_status()
+
+            buffer = ""
+            async for chunk in response.aiter_text():
+                buffer += chunk
+
+                while "\n\n" in buffer:
+                    event_text, buffer = buffer.split("\n\n", 1)
+
+                    if parsed := self._parse_sse_event(event_text):
+                        event_type, event_data = parsed
+                        # Track thread_id from events
+                        if "thread_id" in event_data:
+                            self.thread_id = event_data["thread_id"]
+                        yield event_type, event_data
+
+    # =========================================================================
     # Chat Streaming
     # =========================================================================
 

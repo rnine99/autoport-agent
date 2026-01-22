@@ -157,6 +157,85 @@ curl -N -X POST "http://localhost:8000/api/v1/chat/stream" \
 
 ---
 
+## Resuming a Historical Conversation
+
+To display and continue from a past conversation, follow this workflow:
+
+### Step 1: List User Conversations
+
+Fetch the user's conversation history to get available `thread_id` and `workspace_id` values:
+
+```bash
+curl "http://localhost:8000/api/v1/conversations?limit=50" \
+  -H "X-User-Id: user-123"
+```
+
+**Response:**
+
+```json
+{
+  "threads": [
+    {
+      "thread_id": "thread-abc123",
+      "workspace_id": "ws-xyz789",
+      "first_query_content": "Create a Python script...",
+      "current_status": "completed",
+      "updated_at": "2025-01-15T10:35:00Z"
+    }
+  ],
+  "total": 15,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### Step 2: Replay the Conversation
+
+Use the replay endpoint to stream the full conversation history as SSE events:
+
+```bash
+curl -N "http://localhost:8000/api/v1/threads/thread-abc123/replay"
+```
+
+This streams all messages, tool calls, and results exactly as they occurred, allowing the UI to reconstruct the conversation display.
+
+### Step 3: Continue the Conversation
+
+Once replay is complete, send new messages using the same `thread_id` and `workspace_id`:
+
+```bash
+curl -N -X POST "http://localhost:8000/api/v1/chat/stream" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user-123",
+    "workspace_id": "ws-xyz789",
+    "thread_id": "thread-abc123",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Now add error handling to that script"
+      }
+    ]
+  }'
+```
+
+The agent will have full context from the previous conversation and can continue the work.
+
+### Historical Conversation Flow Diagram
+
+```
+┌─────────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
+│  List Conversations │     │  Replay Thread      │     │  Continue Chat      │
+│  GET /conversations │────▶│  GET /threads/      │────▶│  POST /chat/stream  │
+│  (get thread_id,    │     │  {thread_id}/replay │     │  (same thread_id &  │
+│   workspace_id)     │     │  (display history)  │     │   workspace_id)     │
+└─────────────────────┘     └─────────────────────┘     └─────────────────────┘
+```
+
+See [Conversations API](./conversations.md) for detailed endpoint documentation.
+
+---
+
 ## Authentication
 
 Currently, user identification is handled via:
@@ -170,6 +249,7 @@ Currently, user identification is handled via:
 | [Chat](./chat.md) | Streaming chat with SSE, workflow control | `/api/v1/chat` |
 | [Workflow](./workflow.md) | Workflow state, checkpoints, cancellation | `/api/v1/workflow` |
 | [Workspaces](./workspaces.md) | Workspace CRUD, thread listing, messages | `/api/v1/workspaces` |
+| [Conversations](./conversations.md) | Conversation history, replay, thread messages | `/api/v1/conversations`, `/api/v1/threads` |
 | [Cache](./cache.md) | Cache statistics and management | `/api/v1/cache` |
 | [Health](./chat.md#health-check) | Health check | `/health` |
 

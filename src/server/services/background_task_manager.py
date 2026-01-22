@@ -62,6 +62,7 @@ from src.utils.tracking import serialize_agent_messages
 from src.server.utils.persistence_utils import (
     get_token_usage_from_callback,
     get_tool_usage_from_handler,
+    get_streaming_chunks_from_handler,
     calculate_execution_time,
 )
 
@@ -936,6 +937,10 @@ class BackgroundTaskManager:
                             metadata, "error", thread_id
                         )
 
+                        streaming_chunks = get_streaming_chunks_from_handler(
+                            metadata, "error", thread_id
+                        )
+
                         # Build metadata with all context
                         persist_metadata = {
                             "msg_type": metadata.get("msg_type"),
@@ -952,6 +957,7 @@ class BackgroundTaskManager:
                             execution_time=execution_time,
                             per_call_records=per_call_records,
                             tool_usage=tool_usage,
+                            streaming_chunks=streaming_chunks,
                             metadata=persist_metadata
                         )
                         logger.info(f"[WorkflowPersistence] Error persisted for thread_id={thread_id}")
@@ -1025,6 +1031,10 @@ class BackgroundTaskManager:
                         metadata, "interrupt", thread_id
                     )
 
+                    streaming_chunks = get_streaming_chunks_from_handler(
+                        metadata, "interrupt", thread_id
+                    )
+
                     execution_time = calculate_execution_time(metadata)
 
                     persist_metadata = {
@@ -1042,7 +1052,8 @@ class BackgroundTaskManager:
                         execution_time=execution_time,
                         metadata=persist_metadata,
                         per_call_records=per_call_records,
-                        tool_usage=tool_usage
+                        tool_usage=tool_usage,
+                        streaming_chunks=streaming_chunks
                     )
                     logger.info(f"[WorkflowPersistence] Soft interrupt persisted for thread_id={thread_id}")
                 except Exception as persist_error:
@@ -1107,6 +1118,10 @@ class BackgroundTaskManager:
                             metadata, "cancellation", thread_id
                         )
 
+                        streaming_chunks = get_streaming_chunks_from_handler(
+                            metadata, "cancellation", thread_id
+                        )
+
                         # Calculate execution time
                         execution_time = calculate_execution_time(metadata)
 
@@ -1125,7 +1140,8 @@ class BackgroundTaskManager:
                             execution_time=execution_time,
                             metadata=persist_metadata,
                             per_call_records=per_call_records,
-                            tool_usage=tool_usage
+                            tool_usage=tool_usage,
+                            streaming_chunks=streaming_chunks
                         )
                         logger.info(f"[WorkflowPersistence] Cancellation persisted for thread_id={thread_id}")
                     except Exception as persist_error:

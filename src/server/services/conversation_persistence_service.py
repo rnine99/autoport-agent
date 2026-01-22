@@ -12,7 +12,7 @@ Architecture:
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from uuid import uuid4
 from contextlib import asynccontextmanager
@@ -219,7 +219,8 @@ class ConversationPersistenceService:
         metadata: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
         per_call_records: Optional[list] = None,
-        tool_usage: Optional[Dict[str, int]] = None
+        tool_usage: Optional[Dict[str, int]] = None,
+        streaming_chunks: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         Persist interrupt state (atomic transaction).
@@ -403,7 +404,8 @@ class ConversationPersistenceService:
         execution_time: Optional[float] = None,
         timestamp: Optional[datetime] = None,
         per_call_records: Optional[list] = None,
-        tool_usage: Optional[Dict[str, int]] = None
+        tool_usage: Optional[Dict[str, int]] = None,
+        streaming_chunks: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         Persist workflow completion (atomic transaction).
@@ -456,6 +458,7 @@ class ConversationPersistenceService:
                         errors=errors,
                         execution_time=execution_time,
                         timestamp=timestamp,
+                        streaming_chunks=streaming_chunks,
                         conn=conn
                     )
 
@@ -523,6 +526,7 @@ class ConversationPersistenceService:
         timestamp: Optional[datetime] = None,
         per_call_records: Optional[list] = None,
         tool_usage: Optional[Dict[str, int]] = None,
+        streaming_chunks: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
@@ -563,15 +567,16 @@ class ConversationPersistenceService:
                         response_id=response_id,
                         thread_id=self.thread_id,
                         pair_index=pair_index,
-                        status="error",
+                        status="cancelled",
                         interrupt_reason=None,
                         state_snapshot=state_snapshot,
                         agent_messages=agent_messages,
                         metadata=metadata,
                         warnings=None,
-                        errors=errors,
+                        errors=None,
                         execution_time=execution_time,
                         timestamp=timestamp,
+                        streaming_chunks=streaming_chunks,
                         conn=conn
                     )
 
@@ -652,7 +657,8 @@ class ConversationPersistenceService:
         metadata: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
         per_call_records: Optional[list] = None,
-        tool_usage: Optional[Dict[str, int]] = None
+        tool_usage: Optional[Dict[str, int]] = None,
+        streaming_chunks: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         Persist cancelled state (atomic transaction).
@@ -687,15 +693,16 @@ class ConversationPersistenceService:
                         response_id=response_id,
                         thread_id=self.thread_id,
                         pair_index=pair_index,
-                        status="cancelled",
+                        status="interrupted",
                         interrupt_reason=None,
-                        state_snapshot=state_snapshot,
                         agent_messages=agent_messages,
                         metadata=metadata,
+                        state_snapshot=state_snapshot,
                         warnings=None,
                         errors=None,
                         execution_time=execution_time,
                         timestamp=timestamp,
+                        streaming_chunks=streaming_chunks,
                         conn=conn
                     )
 

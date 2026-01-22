@@ -9,7 +9,7 @@ and cancellation points.
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,31 @@ def get_tool_usage_from_handler(
         )
 
     return tool_usage
+
+
+def get_streaming_chunks_from_handler(
+    metadata: Dict[str, Any],
+    context: str,
+    thread_id: str
+) -> Optional[List[Dict[str, Any]]]:
+    """Extract merged streaming chunks from handler if available."""
+    try:
+        handler = metadata.get("handler")
+        if handler and hasattr(handler, "get_streaming_chunks"):
+            chunks = handler.get_streaming_chunks()
+            if chunks:
+                logger.debug(
+                    f"[WorkflowPersistence] Captured streaming chunks at {context}: "
+                    f"thread_id={thread_id} events={len(chunks)}"
+                )
+            return chunks
+    except Exception as e:
+        logger.warning(
+            f"[WorkflowPersistence] Failed to get streaming chunks at {context} "
+            f"thread_id={thread_id}: {e}"
+        )
+
+    return None
 
 
 def calculate_execution_time(metadata: Dict[str, Any]) -> Optional[float]:

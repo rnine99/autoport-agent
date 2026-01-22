@@ -21,12 +21,14 @@ def show_help() -> None:
 
 [bold]Interactive Commands:[/bold]
   /help                         Show this help
-  /clear                        Clear conversation and screen
+  /new                          Start a new conversation thread
   /tokens                       Show token usage
   /model                        Interactive model selection (arrow keys)
   /model <name>                 Switch to model by name (e.g., /model gpt-5.2)
   /status                       Show workflow and background task status
   /cancel                       Cancel running workflow
+  /workspace                    List/switch/start/stop workspaces
+  /conversation                 List/open past conversations
   /reconnect                    Reconnect to running workflow after ESC
   /files [all]                  List files (all=include system dirs)
   /view <path>                  View file content (supports images)

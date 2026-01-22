@@ -15,11 +15,13 @@ Key responsibilities:
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, Optional, Set, Tuple, cast
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, cast
+
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
 from langgraph.types import StateSnapshot
 
@@ -45,6 +47,112 @@ from src.config.settings import (
 WORKFLOW_TIMEOUT = get_workflow_timeout(default=900)  # seconds
 SSE_KEEPALIVE_INTERVAL = get_sse_keepalive_interval(default=15.0)  # seconds
 SSE_EVENT_LOG_ENABLED = is_sse_event_log_enabled()
+
+MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT = 16 * 1024
+
+
+class StreamEventAccumulator:
+    """Accumulates and merges token-level SSE events for persistence."""
+
+    def __init__(self, max_merged_bytes: int = MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT):
+        self._max_merged_bytes = max_merged_bytes
+        self._events: List[Dict[str, Any]] = []
+
+    def get_events(self) -> List[Dict[str, Any]]:
+        return copy.deepcopy(self._events)
+
+    def add(self, event_type: str, data: Dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            return
+
+        incoming = copy.deepcopy(data)
+
+        if not self._events:
+            self._events.append({"event": event_type, "data": incoming})
+            return
+
+        prev = self._events[-1]
+        if prev.get("event") != event_type:
+            self._events.append({"event": event_type, "data": incoming})
+            return
+
+        if event_type == "message_chunk" and self._try_merge_message_chunk(prev, incoming):
+            return
+
+        if event_type == "tool_call_chunks" and self._try_merge_tool_call_chunks(prev, incoming):
+            return
+
+        self._events.append({"event": event_type, "data": incoming})
+
+    def _try_merge_message_chunk(self, prev_event: Dict[str, Any], incoming: Dict[str, Any]) -> bool:
+        prev_data = prev_event.get("data")
+        if not isinstance(prev_data, dict):
+            return False
+
+        if incoming.get("content_type") == "reasoning_signal":
+            return False
+        if prev_data.get("content_type") == "reasoning_signal":
+            return False
+
+        merge_keys = ("thread_id", "agent", "id", "role", "content_type")
+        if any(prev_data.get(k) != incoming.get(k) for k in merge_keys):
+            return False
+
+        prev_content = prev_data.get("content") or ""
+        incoming_content = incoming.get("content") or ""
+        incoming_finish = incoming.get("finish_reason")
+
+        if incoming_content:
+            if len(prev_content.encode("utf-8")) + len(incoming_content.encode("utf-8")) > self._max_merged_bytes:
+                return False
+            prev_data["content"] = f"{prev_content}{incoming_content}"
+
+        if incoming_finish is not None:
+            prev_data["finish_reason"] = incoming_finish
+
+        return bool(incoming_content) or (incoming_finish is not None)
+
+    def _try_merge_tool_call_chunks(self, prev_event: Dict[str, Any], incoming: Dict[str, Any]) -> bool:
+        prev_data = prev_event.get("data")
+        if not isinstance(prev_data, dict):
+            return False
+
+        merge_keys = ("thread_id", "agent", "id")
+        if any(prev_data.get(k) != incoming.get(k) for k in merge_keys):
+            return False
+
+        prev_chunks = prev_data.get("tool_call_chunks")
+        incoming_chunks = incoming.get("tool_call_chunks")
+        if not (isinstance(prev_chunks, list) and isinstance(incoming_chunks, list)):
+            return False
+        if len(prev_chunks) != 1 or len(incoming_chunks) != 1:
+            return False
+
+        prev_chunk = prev_chunks[0]
+        incoming_chunk = incoming_chunks[0]
+        if not (isinstance(prev_chunk, dict) and isinstance(incoming_chunk, dict)):
+            return False
+
+        prev_call_id = prev_chunk.get("id")
+        incoming_call_id = incoming_chunk.get("id")
+        if prev_call_id is not None or incoming_call_id is not None:
+            if prev_call_id != incoming_call_id:
+                return False
+        else:
+            if prev_chunk.get("index") != incoming_chunk.get("index"):
+                return False
+
+        prev_args = prev_chunk.get("args") or ""
+        incoming_args = incoming_chunk.get("args") or ""
+        if not isinstance(prev_args, str) or not isinstance(incoming_args, str):
+            return False
+
+        if incoming_args:
+            if len(prev_args.encode("utf-8")) + len(incoming_args.encode("utf-8")) > self._max_merged_bytes:
+                return False
+            prev_chunk["args"] = f"{prev_args}{incoming_args}"
+
+        return bool(incoming_args)
 
 
 async def multiplex_streams(graph_stream: AsyncGenerator, keepalive_queue: asyncio.Queue):
@@ -147,6 +255,7 @@ class WorkflowStreamHandler:
         keepalive_interval: Optional[float] = None,
         workflow_timeout: Optional[int] = None,
         background_registry: Optional[Any] = None,
+        merged_stream_chunk_max_bytes: int = MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT,
     ):
         """
         Initialize the workflow stream handler.
@@ -159,6 +268,7 @@ class WorkflowStreamHandler:
             keepalive_interval: Seconds between keepalive events (default from env)
             workflow_timeout: Maximum workflow execution time in seconds (default from env)
             background_registry: BackgroundTaskRegistry instance for background task status (optional)
+            merged_stream_chunk_max_bytes: Max bytes per merged stored stream chunk
         """
         self.thread_id = thread_id
         self.track_tokens = track_tokens
@@ -188,6 +298,11 @@ class WorkflowStreamHandler:
 
         # Event sequence numbering for reconnection support
         self.event_sequence: int = 0
+
+        # Accumulate merged streaming chunks for persistence
+        self._stream_event_accumulator = StreamEventAccumulator(
+            max_merged_bytes=merged_stream_chunk_max_bytes
+        )
 
         # Keepalive task management
         self._keepalive_task: Optional[asyncio.Task] = None
@@ -1214,6 +1329,12 @@ class WorkflowStreamHandler:
         if data.get("content") == "":
             data.pop("content")
 
+        # Accumulate merged events for persistence (never break streaming)
+        try:
+            self._stream_event_accumulator.add(event_type, data)
+        except Exception as e:
+            logger.debug(f"[WorkflowStreamHandler] Failed to accumulate stream event: {e}")
+
         # Increment sequence number for this event
         self.event_sequence += 1
 
@@ -1295,6 +1416,11 @@ class WorkflowStreamHandler:
         }
 
         return self._format_sse_event("credit_usage", event_data)
+
+    def get_streaming_chunks(self) -> Optional[List[Dict[str, Any]]]:
+        """Return merged stream events for persistence."""
+        events = self._stream_event_accumulator.get_events()
+        return events or None
 
     def get_tool_usage(self) -> Optional[Dict[str, int]]:
         """

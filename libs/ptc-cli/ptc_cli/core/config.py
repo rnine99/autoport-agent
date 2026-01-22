@@ -86,7 +86,7 @@ MODEL_OPTIONS = [
 
 # Interactive commands (for auto-completion)
 COMMANDS = {
-    "clear": "Clear screen and reset conversation",
+    "new": "Start a new conversation thread (no clear)",
     "help": "Show help information",
     "tokens": "Show token usage for current session",
     "files": "List files in sandbox (use 'files all' for system dirs)",
@@ -94,6 +94,11 @@ COMMANDS = {
     "copy": "Copy file to clipboard: /copy <path>",
     "download": "Download file: /download <path> [local]",
     "model": "Switch LLM model (only at session start)",
+    "conversation": "List and open past conversations",
+    "status": "Show workflow and workspace status",
+    "cancel": "Cancel running workflow",
+    "reconnect": "Reconnect to a paused workflow",
+    "workspace": "List/switch/start/stop workspaces",
     "exit": "Exit the CLI",
 }
 

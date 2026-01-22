@@ -274,7 +274,7 @@ app.add_middleware(
 # ============================================================================
 # Import routers
 from src.server.app.workflow import router as workflow_router
-from src.server.app.conversation import workspaces_threads_router, messages_router
+from src.server.app.conversation import workspaces_threads_router, conversations_router, threads_router, messages_router
 from src.server.app.cache import router as cache_router
 from src.server.app.utilities import health_router
 from src.server.app.chat import router as chat_router  # Main chat endpoint (v1)
@@ -285,6 +285,8 @@ app.include_router(chat_router)  # /api/v1/chat/* - Main chat endpoint
 app.include_router(workflow_router)  # /api/v1/workflow/* - Workflow state management
 app.include_router(workspaces_router)  # /api/v1/workspaces/* - Workspace CRUD
 app.include_router(workspaces_threads_router)  # /api/v1/workspaces/{id}/threads|messages - Thread management
+app.include_router(conversations_router)  # /api/v1/conversations/* - User conversations + messages
+app.include_router(threads_router)  # /api/v1/threads/* - Thread utilities (replay)
 app.include_router(messages_router)  # /api/v1/messages/* - Message detail endpoints
 app.include_router(cache_router)  # /api/v1/cache/* - Cache management
 app.include_router(health_router)  # /health - Health check

@@ -258,6 +258,7 @@ Thread in list view within a workspace.
 | thread_index | integer | Thread index within workspace |
 | current_status | string | Current thread status |
 | msg_type | string | Message type (optional) |
+| first_query_content | string | First user query content preview (optional) |
 | created_at | datetime | Creation timestamp |
 | updated_at | datetime | Last update timestamp |
 

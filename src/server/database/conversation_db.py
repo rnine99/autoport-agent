@@ -402,6 +402,69 @@ async def get_workspace_threads(
         raise
 
 
+async def get_threads_for_user(
+    user_id: str,
+    limit: int = 20,
+    offset: int = 0,
+    sort_by: str = "updated_at",
+    sort_order: str = "desc",
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Get all threads for a user across all workspaces."""
+    sort_fields = {
+        "created_at": "t.created_at",
+        "updated_at": "t.updated_at",
+        "thread_index": "t.thread_index",
+    }
+    if sort_by not in sort_fields:
+        sort_by = "updated_at"
+
+    if sort_order.lower() not in ["asc", "desc"]:
+        sort_order = "desc"
+
+    order_by = sort_fields[sort_by]
+
+    try:
+        async with get_db_connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT COUNT(*) as total
+                    FROM conversation_thread t
+                    JOIN workspaces w ON t.workspace_id = w.workspace_id
+                    WHERE w.user_id = %s AND w.status != 'deleted'
+                    """,
+                    (user_id,),
+                )
+                total_result = await cur.fetchone()
+                total_count = total_result["total"] if total_result else 0
+
+                query = f"""
+                    SELECT
+                        t.thread_id, t.workspace_id, t.current_status, t.msg_type, t.thread_index,
+                        t.created_at, t.updated_at,
+                        fq.content AS first_query_content
+                    FROM conversation_thread t
+                    JOIN workspaces w ON t.workspace_id = w.workspace_id
+                    LEFT JOIN LATERAL (
+                        SELECT q.content
+                        FROM conversation_query q
+                        WHERE q.thread_id = t.thread_id
+                        ORDER BY q.pair_index ASC
+                        LIMIT 1
+                    ) fq ON TRUE
+                    WHERE w.user_id = %s AND w.status != 'deleted'
+                    ORDER BY {order_by} {sort_order.upper()}
+                    LIMIT %s OFFSET %s
+                """
+                await cur.execute(query, (user_id, limit, offset))
+                threads = await cur.fetchall()
+                return [dict(row) for row in threads], total_count
+
+    except Exception as e:
+        logger.error(f"Error getting threads for user: {e}")
+        raise
+
+
 async def get_workspace_messages(
     workspace_id: str,
     limit: Optional[int] = None,
@@ -498,6 +561,123 @@ async def get_workspace_messages(
 
     except Exception as e:
         logger.error(f"Error getting workspace messages: {e}")
+        raise
+
+
+async def get_thread_messages(
+    thread_id: str,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], List[Dict[str, Any]], int]:
+    """Get all messages for a single thread (chronologically ordered by pair_index)."""
+    try:
+        async with get_db_connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT thread_id, workspace_id, thread_index, current_status, msg_type, created_at, updated_at
+                    FROM conversation_thread
+                    WHERE thread_id = %s
+                    """,
+                    (thread_id,),
+                )
+                thread = await cur.fetchone()
+                if not thread:
+                    return None, None, [], 0
+
+                thread = dict(thread)
+
+                await cur.execute(
+                    """
+                    SELECT workspace_id, user_id, name, description, status,
+                           created_at, updated_at
+                    FROM workspaces
+                    WHERE workspace_id = %s
+                    """,
+                    (thread["workspace_id"],),
+                )
+                workspace = await cur.fetchone()
+                if not workspace:
+                    return None, thread, [], 0
+
+                workspace = dict(workspace)
+
+                await cur.execute(
+                    """
+                    SELECT COUNT(*) as total
+                    FROM conversation_query
+                    WHERE thread_id = %s
+                    """,
+                    (thread_id,),
+                )
+                total_result = await cur.fetchone()
+                total_count = total_result["total"] if total_result else 0
+
+                if limit:
+                    await cur.execute(
+                        """
+                        SELECT
+                            t.thread_id,
+                            t.thread_index,
+                            q.pair_index,
+                            q.query_id,
+                            q.content as query_content,
+                            q.type as query_type,
+                            q.feedback_action,
+                            q.metadata as query_metadata,
+                            q.timestamp as query_timestamp,
+                            r.response_id,
+                            r.status,
+                            r.interrupt_reason,
+                            r.agent_messages,
+                            r.execution_time,
+                            r.warnings,
+                            r.errors,
+                            r.timestamp as response_timestamp
+                        FROM conversation_query q
+                        JOIN conversation_thread t ON q.thread_id = t.thread_id
+                        LEFT JOIN conversation_response r ON q.thread_id = r.thread_id AND q.pair_index = r.pair_index
+                        WHERE q.thread_id = %s
+                        ORDER BY q.pair_index ASC
+                        LIMIT %s OFFSET %s
+                        """,
+                        (thread_id, limit, offset),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        SELECT
+                            t.thread_id,
+                            t.thread_index,
+                            q.pair_index,
+                            q.query_id,
+                            q.content as query_content,
+                            q.type as query_type,
+                            q.feedback_action,
+                            q.metadata as query_metadata,
+                            q.timestamp as query_timestamp,
+                            r.response_id,
+                            r.status,
+                            r.interrupt_reason,
+                            r.agent_messages,
+                            r.execution_time,
+                            r.warnings,
+                            r.errors,
+                            r.timestamp as response_timestamp
+                        FROM conversation_query q
+                        JOIN conversation_thread t ON q.thread_id = t.thread_id
+                        LEFT JOIN conversation_response r ON q.thread_id = r.thread_id AND q.pair_index = r.pair_index
+                        WHERE q.thread_id = %s
+                        ORDER BY q.pair_index ASC
+                        """,
+                        (thread_id,),
+                    )
+
+                messages = await cur.fetchall()
+                return workspace, thread, [dict(row) for row in messages], total_count
+
+    except Exception as e:
+        logger.error(f"Error getting thread messages: {e}")
         raise
 
 
@@ -712,6 +892,7 @@ async def create_response(
     errors: Optional[List[str]] = None,
     execution_time: Optional[float] = None,
     timestamp: Optional[datetime] = None,
+    streaming_chunks: Optional[Any] = None,
     conn=None,
     idempotent: bool = True
 ) -> Dict[str, Any]:
@@ -747,9 +928,10 @@ async def create_response(
                         INSERT INTO conversation_response (
                             response_id, thread_id, pair_index, status,
                             interrupt_reason, agent_messages, metadata,
-                            state_snapshot, warnings, errors, execution_time, timestamp
+                            state_snapshot, warnings, errors, execution_time, timestamp,
+                            streaming_chunks
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (thread_id, pair_index) DO UPDATE
                         SET status = EXCLUDED.status,
                             interrupt_reason = EXCLUDED.interrupt_reason,
@@ -759,10 +941,12 @@ async def create_response(
                             warnings = EXCLUDED.warnings,
                             errors = EXCLUDED.errors,
                             execution_time = EXCLUDED.execution_time,
-                            timestamp = EXCLUDED.timestamp
+                            timestamp = EXCLUDED.timestamp,
+                            streaming_chunks = EXCLUDED.streaming_chunks
                         RETURNING response_id, thread_id, pair_index, status,
                                   interrupt_reason, agent_messages, metadata,
-                                  state_snapshot, warnings, errors, execution_time, timestamp
+                                  state_snapshot, warnings, errors, execution_time, timestamp,
+                                  streaming_chunks
                     """, (
                         response_id, thread_id, pair_index,
                         status, interrupt_reason,
@@ -772,7 +956,8 @@ async def create_response(
                         warnings or [],
                         errors or [],
                         execution_time,
-                        timestamp
+                        timestamp,
+                        Json(streaming_chunks) if streaming_chunks else None
                     ))
                 else:
                     # Non-idempotent: fail on conflict
@@ -780,12 +965,14 @@ async def create_response(
                         INSERT INTO conversation_response (
                             response_id, thread_id, pair_index, status,
                             interrupt_reason, agent_messages, metadata,
-                            state_snapshot, warnings, errors, execution_time, timestamp
+                            state_snapshot, warnings, errors, execution_time, timestamp,
+                            streaming_chunks
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING response_id, thread_id, pair_index, status,
                                   interrupt_reason, agent_messages, metadata,
-                                  state_snapshot, warnings, errors, execution_time, timestamp
+                                  state_snapshot, warnings, errors, execution_time, timestamp,
+                                  streaming_chunks
                     """, (
                         response_id, thread_id, pair_index,
                         status, interrupt_reason,
@@ -795,7 +982,8 @@ async def create_response(
                         warnings or [],
                         errors or [],
                         execution_time,
-                        timestamp
+                        timestamp,
+                        Json(streaming_chunks) if streaming_chunks else None
                     ))
                 result = await cur.fetchone()
                 logger.info(f"[conversation_db] create_response response_id={response_id} thread_id={thread_id} pair_index={pair_index} status={status}")
@@ -810,9 +998,10 @@ async def create_response(
                             INSERT INTO conversation_response (
                                 response_id, thread_id, pair_index, status,
                                 interrupt_reason, agent_messages, metadata,
-                                state_snapshot, warnings, errors, execution_time, timestamp
+                                state_snapshot, warnings, errors, execution_time, timestamp,
+                                streaming_chunks
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (thread_id, pair_index) DO UPDATE
                             SET status = EXCLUDED.status,
                                 interrupt_reason = EXCLUDED.interrupt_reason,
@@ -822,10 +1011,12 @@ async def create_response(
                                 warnings = EXCLUDED.warnings,
                                 errors = EXCLUDED.errors,
                                 execution_time = EXCLUDED.execution_time,
-                                timestamp = EXCLUDED.timestamp
+                                timestamp = EXCLUDED.timestamp,
+                                streaming_chunks = EXCLUDED.streaming_chunks
                             RETURNING response_id, thread_id, pair_index, status,
                                       interrupt_reason, agent_messages, metadata,
-                                      state_snapshot, warnings, errors, execution_time, timestamp
+                                      state_snapshot, warnings, errors, execution_time, timestamp,
+                                      streaming_chunks
                         """, (
                             response_id, thread_id, pair_index,
                             status, interrupt_reason,
@@ -835,7 +1026,8 @@ async def create_response(
                             warnings or [],
                             errors or [],
                             execution_time,
-                            timestamp
+                            timestamp,
+                            Json(streaming_chunks) if streaming_chunks else None
                         ))
                     else:
                         # Non-idempotent: fail on conflict
@@ -843,12 +1035,14 @@ async def create_response(
                             INSERT INTO conversation_response (
                                 response_id, thread_id, pair_index, status,
                                 interrupt_reason, agent_messages, metadata,
-                                state_snapshot, warnings, errors, execution_time, timestamp
+                                state_snapshot, warnings, errors, execution_time, timestamp,
+                                streaming_chunks
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             RETURNING response_id, thread_id, pair_index, status,
                                       interrupt_reason, agent_messages, metadata,
-                                      state_snapshot, warnings, errors, execution_time, timestamp
+                                      state_snapshot, warnings, errors, execution_time, timestamp,
+                                      streaming_chunks
                         """, (
                             response_id, thread_id, pair_index,
                             status, interrupt_reason,
@@ -858,7 +1052,8 @@ async def create_response(
                             warnings or [],
                             errors or [],
                             execution_time,
-                            timestamp
+                            timestamp,
+                            Json(streaming_chunks) if streaming_chunks else None
                         ))
                     result = await cur.fetchone()
                     logger.info(f"[conversation_db] create_response response_id={response_id} thread_id={thread_id} pair_index={pair_index} status={status}")
@@ -894,7 +1089,8 @@ async def get_responses_for_thread(
                         SELECT
                             response_id, thread_id, pair_index, status,
                             interrupt_reason, agent_messages, metadata,
-                            state_snapshot, warnings, errors, execution_time, timestamp
+                            state_snapshot, warnings, errors, execution_time, timestamp,
+                            streaming_chunks
                         FROM conversation_response
                         WHERE thread_id = %s
                         ORDER BY pair_index ASC
@@ -905,7 +1101,8 @@ async def get_responses_for_thread(
                         SELECT
                             response_id, thread_id, pair_index, status,
                             interrupt_reason, agent_messages, metadata,
-                            state_snapshot, warnings, errors, execution_time, timestamp
+                            state_snapshot, warnings, errors, execution_time, timestamp,
+                            streaming_chunks
                         FROM conversation_response
                         WHERE thread_id = %s
                         ORDER BY pair_index ASC

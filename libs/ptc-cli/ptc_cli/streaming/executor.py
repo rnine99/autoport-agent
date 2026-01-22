@@ -517,6 +517,97 @@ async def execute_task(
     return None
 
 
+async def replay_conversation(
+    client: SSEStreamClient,
+    session_state: "SessionState",
+) -> None:
+    """Replay a conversation thread from persisted streaming chunks."""
+    thread_id = session_state.thread_id
+    if not thread_id:
+        console.print("[yellow]No conversation selected[/yellow]")
+        return
+
+    todo_state: dict[str, list | None] = {"todos": None}
+    tool_name_by_id: dict[str, str] = {}
+
+    console.print(f"[dim]Replaying conversation {thread_id[:8]}...[/dim]")
+    console.print()
+
+    state: StreamingState | None = None
+
+    async for event_type, event_data in client.replay_thread(thread_id):
+        if event_type == "user_message":
+            # Flush any previous assistant output
+            if state is not None:
+                state.flush_text(final=True)
+                if state.spinner_active:
+                    state.stop_spinner()
+                if state.has_responded:
+                    console.print()
+
+            todo_state = {"todos": None}
+            tool_name_by_id = {}
+
+            content = str(event_data.get("content", ""))
+            console.print("●", style=COLORS["user"], markup=False, end=" ")
+            console.print(content, style=COLORS["user"], markup=False)
+            console.print()
+
+            state = StreamingState(console, f"[bold {COLORS['thinking']}]Replaying...", COLORS)
+            if state.spinner_active:
+                state.stop_spinner()
+            continue
+
+        if event_type == "replay_done":
+            break
+
+        if event_type == "message_chunk":
+            if state is None:
+                state = StreamingState(console, f"[bold {COLORS['thinking']}]Replaying...", COLORS)
+                if state.spinner_active:
+                    state.stop_spinner()
+            _handle_message_chunk(event_data, state)
+
+        elif event_type == "tool_calls":
+            if state is None:
+                state = StreamingState(console, f"[bold {COLORS['thinking']}]Replaying...", COLORS)
+                if state.spinner_active:
+                    state.stop_spinner()
+            for tool_call in event_data.get("tool_calls", []) or []:
+                tool_call_id = tool_call.get("id")
+                tool_name = tool_call.get("name")
+                if tool_call_id and tool_name:
+                    tool_name_by_id[tool_call_id] = tool_name
+            _handle_tool_calls(event_data, state, todo_state)
+
+        elif event_type == "tool_call_result":
+            if state is None:
+                state = StreamingState(console, f"[bold {COLORS['thinking']}]Replaying...", COLORS)
+                if state.spinner_active:
+                    state.stop_spinner()
+            _handle_tool_result(event_data, state, tool_name_by_id)
+
+        elif event_type == "tool_call_chunks":
+            # Ignore animation events in replay
+            pass
+
+        elif event_type == "error":
+            if state is not None:
+                state.flush_text(final=True)
+                if state.spinner_active:
+                    state.stop_spinner()
+            console.print(f"[red]Error: {event_data.get('error', 'Unknown error')}[/red]")
+            console.print()
+            break
+
+    if state is not None:
+        state.flush_text(final=True)
+        if state.spinner_active:
+            state.stop_spinner()
+        if state.has_responded:
+            console.print()
+
+
 async def reconnect_to_workflow(
     client: SSEStreamClient,
     session_state: "SessionState",

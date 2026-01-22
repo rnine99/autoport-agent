@@ -318,6 +318,45 @@ async def execute_task(
     )
     esc_watcher.start()
 
+    # Expand @file mentions by fetching from the live sandbox via backend API.
+    # This keeps UX consistent across CLI/web and avoids direct Daytona access.
+    try:
+        from ptc_cli.input import parse_file_mentions
+
+        _text, mention_paths = parse_file_mentions(user_input)
+        if mention_paths:
+            max_total_bytes = 500_000
+            max_files = 10
+            included_blocks: list[str] = []
+            total_bytes = 0
+
+            for p in mention_paths[:max_files]:
+                try:
+                    data = await client.read_workspace_file(path=p, offset=0, limit=20000)
+                    content = str(data.get("content") or "")
+                except Exception:
+                    content = ""
+
+                if not content:
+                    included_blocks.append(f"--- BEGIN FILE: {p} ---\n<could not read file>\n--- END FILE: {p} ---")
+                    continue
+
+                encoded_len = len(content.encode("utf-8"))
+                if total_bytes + encoded_len > max_total_bytes:
+                    included_blocks.append(
+                        f"--- BEGIN FILE: {p} ---\n<truncated: file mention budget exceeded>\n--- END FILE: {p} ---"
+                    )
+                    break
+
+                included_blocks.append(f"--- BEGIN FILE: {p} ---\n{content}\n--- END FILE: {p} ---")
+                total_bytes += encoded_len
+
+            if included_blocks:
+                user_input = user_input + "\n\n" + "\n\n".join(included_blocks)
+    except Exception:
+        # Non-fatal: continue without expansion.
+        pass
+
     try:
         # Stream from API
         async for event_type, event_data in client.stream_chat(
@@ -416,6 +455,23 @@ async def execute_task(
 
             elif event_type == "done":
                 break
+
+            elif event_type == "artifact":
+                # Generic artifact events (file operations, todo updates, etc.)
+                if event_data.get("artifact_type") == "file_operation":
+                    payload = event_data.get("payload") or {}
+                    file_path = payload.get("file_path")
+                    if isinstance(file_path, str) and file_path:
+                        files = getattr(session_state, "sandbox_files", []) or []
+                        if file_path not in files:
+                            files = [*files, file_path]
+                            session_state.sandbox_files = files
+                            completer = getattr(session_state, "sandbox_completer", None)
+                            if completer is not None and hasattr(completer, "set_files"):
+                                try:
+                                    completer.set_files(files)
+                                except Exception:
+                                    pass
 
             elif event_type == "keepalive":
                 # Heartbeat - ignore

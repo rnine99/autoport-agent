@@ -18,7 +18,7 @@ SLASH_COMMAND_RE = re.compile(r"^/(?P<command>[a-z]*)$")
 SLASH_FILE_CMD_RE = re.compile(r"^/(view|download|copy)\s+(?P<path>(?:[^\s]|(?<=\\)\s)*)$")
 
 # System directories to filter by default in /view, /download, /copy
-SYSTEM_DIRS = ("code/", "tools/", "mcp_servers/")
+SYSTEM_DIRS = ("code/", "tools/", "mcp_servers/", "skills/")
 
 
 class SandboxFileCompleter(Completer):
@@ -116,7 +116,7 @@ class CommandCompleter(Completer):
     def get_completions(
         self,
         document: Document,
-        _complete_event: CompleteEvent,
+        complete_event: CompleteEvent,  # noqa: ARG002
     ) -> Generator[Completion, None, None]:
         """Get command completions when / is at the start.
 

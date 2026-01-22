@@ -177,6 +177,86 @@ class SSEStreamClient:
         return response.json()
 
     # =========================================================================
+    # Workspace Files (Live Sandbox)
+    # =========================================================================
+
+    async def list_workspace_files(
+        self,
+        *,
+        path: str = ".",
+        include_system: bool = False,
+        pattern: str = "**/*",
+    ) -> list[str]:
+        """List files in the active workspace sandbox."""
+        if not self.workspace_id:
+            raise ValueError("workspace_id is required. Create a workspace first via POST /workspaces")
+
+        url = urljoin(self.base_url, f"/api/v1/workspaces/{self.workspace_id}/files")
+        response = await self.client.get(
+            url,
+            headers={"X-User-Id": self.user_id},
+            params={"path": path, "include_system": include_system, "pattern": pattern},
+        )
+        response.raise_for_status()
+        return list(response.json().get("files", []) or [])
+
+    async def read_workspace_file(
+        self,
+        *,
+        path: str,
+        offset: int = 0,
+        limit: int = 20000,
+    ) -> dict[str, Any]:
+        """Read a file from the active workspace sandbox."""
+        if not self.workspace_id:
+            raise ValueError("workspace_id is required. Create a workspace first via POST /workspaces")
+
+        url = urljoin(self.base_url, f"/api/v1/workspaces/{self.workspace_id}/files/read")
+        response = await self.client.get(
+            url,
+            headers={"X-User-Id": self.user_id},
+            params={"path": path, "offset": offset, "limit": limit},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def download_workspace_file(self, *, path: str) -> bytes:
+        """Download raw bytes from the active workspace sandbox."""
+        if not self.workspace_id:
+            raise ValueError("workspace_id is required. Create a workspace first via POST /workspaces")
+
+        url = urljoin(self.base_url, f"/api/v1/workspaces/{self.workspace_id}/files/download")
+        response = await self.client.get(
+            url,
+            headers={"X-User-Id": self.user_id},
+            params={"path": path},
+        )
+        response.raise_for_status()
+        return response.content
+
+    async def upload_workspace_file(
+        self,
+        *,
+        path: str,
+        content: bytes,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload bytes to a file in the active workspace sandbox."""
+        if not self.workspace_id:
+            raise ValueError("workspace_id is required. Create a workspace first via POST /workspaces")
+
+        url = urljoin(self.base_url, f"/api/v1/workspaces/{self.workspace_id}/files/upload")
+        files = {"file": (filename or path.split("/")[-1] or "upload", content)}
+        response = await self.client.post(
+            url,
+            headers={"X-User-Id": self.user_id},
+            params={"path": path},
+            files=files,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    # =========================================================================
     # Conversations
     # =========================================================================
 

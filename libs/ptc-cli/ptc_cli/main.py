@@ -247,7 +247,21 @@ async def simple_cli(
     console.print()
 
     # Create prompt session and token tracker
-    prompt_session = create_prompt_session(assistant_id, session_state, None, {})
+    from ptc_cli.input.completers import SandboxFileCompleter
+
+    sandbox_completer = SandboxFileCompleter()
+    try:
+        files = await client.list_workspace_files(include_system=False)
+        sandbox_completer.set_files(files)
+    except Exception:
+        # Non-fatal: autocomplete will populate after first /files or file ops.
+        pass
+
+    # Store for streaming updates (artifact events) and /files refresh.
+    session_state.sandbox_completer = sandbox_completer
+    session_state.sandbox_files = files if 'files' in locals() else []
+
+    prompt_session = create_prompt_session(assistant_id, session_state, sandbox_completer, {})
     token_tracker = TokenTracker()
 
     logger.info(
@@ -271,7 +285,7 @@ async def simple_cli(
             session_state.last_exit_reason = "prompt_eoferror"
             if not sys.stdin.isatty():
                 break
-            prompt_session = create_prompt_session(assistant_id, session_state, None, {})
+            prompt_session = create_prompt_session(assistant_id, session_state, sandbox_completer, {})
             continue
         except KeyboardInterrupt:
             if getattr(session_state, "exit_requested", False):

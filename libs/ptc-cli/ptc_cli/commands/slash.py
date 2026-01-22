@@ -96,6 +96,183 @@ async def _ensure_workspace_running(client: "SSEStreamClient", workspace_id: str
         return False
 
 
+def _normalize_path(path: str) -> str:
+    """Normalize server/sandbox paths for CLI display.
+
+    The backend returns virtual paths (e.g. "results/foo.txt") but we also
+    accept absolute sandbox paths (e.g. "/home/daytona/results/foo.txt").
+    """
+
+    if not path:
+        return path
+
+    if path.startswith("/home/daytona/"):
+        return path[len("/home/daytona/"):]
+
+    if path.startswith("/") and not path.startswith("/tmp/"):
+        return path.lstrip("/")
+
+    return path
+
+
+def _render_tree(files: list[str]) -> list[str]:
+    """Render a simple directory tree from file paths."""
+
+    # Normalize and sort for stable output.
+    normalized = sorted({_normalize_path(p) for p in files if p})
+    if not normalized:
+        return []
+
+    tree: dict[str, Any] = {}
+    for file_path in normalized:
+        parts = [p for p in file_path.split("/") if p]
+        node = tree
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node.setdefault("__files__", []).append(parts[-1])
+
+    lines: list[str] = []
+
+    def walk(node: dict[str, Any], prefix: str = "") -> None:
+        dirs = sorted([k for k in node.keys() if k != "__files__"])
+        files_here = sorted(node.get("__files__", []))
+
+        entries: list[tuple[str, str, Any]] = []
+        for d in dirs:
+            entries.append(("dir", d, node[d]))
+        for f in files_here:
+            entries.append(("file", f, None))
+
+        for idx, (kind, name, child) in enumerate(entries):
+            last = idx == len(entries) - 1
+            connector = "└── " if last else "├── "
+            lines.append(f"{prefix}{connector}{name}")
+            if kind == "dir":
+                extension = "    " if last else "│   "
+                walk(child, prefix + extension)
+
+    # Root prints entries without a top-level dot.
+    walk(tree, prefix="")
+    return lines
+
+
+async def _handle_files_command(client: "SSEStreamClient", *, show_all: bool) -> list[str]:
+    if not client.workspace_id:
+        console.print("[yellow]No active workspace[/yellow]")
+        return []
+
+    if not await _ensure_workspace_running(client, client.workspace_id):
+        console.print(f"[red]Workspace not available: {client.workspace_id}[/red]")
+        return []
+
+    files = await client.list_workspace_files(include_system=show_all)
+    if not files:
+        console.print("[dim]No files found[/dim]")
+        return []
+
+    console.print("[cyan]Sandbox files:[/cyan]")
+    for line in _render_tree(files):
+        console.print(line)
+    return files
+
+
+async def _handle_view_command(client: "SSEStreamClient", path: str) -> None:
+    if not path:
+        console.print("[yellow]Usage:[/yellow] /view <path>")
+        return
+
+    if not client.workspace_id:
+        console.print("[yellow]No active workspace[/yellow]")
+        return
+
+    if not await _ensure_workspace_running(client, client.workspace_id):
+        console.print(f"[red]Workspace not available: {client.workspace_id}[/red]")
+        return
+
+    normalized = _normalize_path(path)
+
+    # If it's a common binary type, download instead of printing.
+    lower = normalized.lower()
+    is_binary = any(lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"))
+
+    if is_binary:
+        content = await client.download_workspace_file(path=path)
+        from pathlib import Path
+
+        out_path = Path.cwd() / (normalized.split("/")[-1] or "download")
+        out_path.write_bytes(content)
+        console.print(f"[green]Downloaded:[/green] {out_path}")
+        return
+
+    data = await client.read_workspace_file(path=path)
+    content = str(data.get("content") or "")
+    if not content:
+        console.print("[yellow]File is empty[/yellow]")
+        return
+
+    # Rich syntax highlighting.
+    from rich.syntax import Syntax
+    from ptc_cli.core import get_syntax_theme
+
+    file_name = normalized.split("/")[-1]
+    syntax = Syntax(content, "text", theme=get_syntax_theme(), line_numbers=True)
+    console.print(f"[cyan]{file_name}[/cyan]")
+    console.print(syntax)
+
+
+async def _handle_copy_command(client: "SSEStreamClient", path: str) -> None:
+    if not path:
+        console.print("[yellow]Usage:[/yellow] /copy <path>")
+        return
+
+    if not client.workspace_id:
+        console.print("[yellow]No active workspace[/yellow]")
+        return
+
+    if not await _ensure_workspace_running(client, client.workspace_id):
+        console.print(f"[red]Workspace not available: {client.workspace_id}[/red]")
+        return
+
+    data = await client.read_workspace_file(path=path)
+    content = str(data.get("content") or "")
+    if not content:
+        console.print("[yellow]File not found or empty[/yellow]")
+        return
+
+    try:
+        import pyperclip  # type: ignore
+    except Exception:
+        console.print("[yellow]Clipboard support requires 'pyperclip'[/yellow]")
+        return
+
+    pyperclip.copy(content)
+    console.print("[green]Copied to clipboard[/green]")
+
+
+async def _handle_download_command(client: "SSEStreamClient", remote_path: str, local_path: str | None) -> None:
+    if not remote_path:
+        console.print("[yellow]Usage:[/yellow] /download <path> [local]")
+        return
+
+    if not client.workspace_id:
+        console.print("[yellow]No active workspace[/yellow]")
+        return
+
+    if not await _ensure_workspace_running(client, client.workspace_id):
+        console.print(f"[red]Workspace not available: {client.workspace_id}[/red]")
+        return
+
+    content = await client.download_workspace_file(path=remote_path)
+
+    from pathlib import Path
+
+    default_name = _normalize_path(remote_path).split("/")[-1] or "download"
+    out_path = Path(local_path) if local_path else (Path.cwd() / default_name)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(content)
+    console.print(f"[green]Downloaded:[/green] {out_path}")
+
+
 if TYPE_CHECKING:
     from ptc_cli.api.client import SSEStreamClient
     from ptc_cli.core.state import SessionState
@@ -185,12 +362,39 @@ async def handle_command(
                 console.print("[yellow]Please specify a model name[/yellow]")
         console.print()
 
-    elif cmd_lower in ("/files", "/view", "/copy", "/download") or cmd_lower.startswith(
-        ("/files ", "/view ", "/copy ", "/download ")
-    ):
+    elif cmd_lower == "/files" or cmd_lower.startswith("/files "):
         console.print()
-        console.print("[yellow]Sandbox commands are not available via API.[/yellow]")
-        console.print("[dim]File operations are handled through the agent.[/dim]")
+        parts = cmd.split()
+        show_all = len(parts) >= 2 and parts[1].lower() == "all"
+        files = await _handle_files_command(client, show_all=show_all)
+        session_state.sandbox_files = files
+        completer = getattr(session_state, "sandbox_completer", None)
+        if completer is not None and hasattr(completer, "set_files"):
+            try:
+                completer.set_files(files)
+            except Exception:
+                pass
+        console.print()
+
+    elif cmd_lower == "/view" or cmd_lower.startswith("/view "):
+        console.print()
+        path = cmd[5:].strip() if cmd_lower.startswith("/view ") else ""
+        await _handle_view_command(client, path)
+        console.print()
+
+    elif cmd_lower == "/copy" or cmd_lower.startswith("/copy "):
+        console.print()
+        path = cmd[5:].strip() if cmd_lower.startswith("/copy ") else ""
+        await _handle_copy_command(client, path)
+        console.print()
+
+    elif cmd_lower == "/download" or cmd_lower.startswith("/download "):
+        console.print()
+        rest = cmd[9:].strip() if cmd_lower.startswith("/download") else ""
+        parts = rest.split(maxsplit=1) if rest else []
+        remote = parts[0] if parts else ""
+        local = parts[1] if len(parts) > 1 else None
+        await _handle_download_command(client, remote, local)
         console.print()
 
     elif cmd_lower == "/status":

@@ -235,6 +235,11 @@ class RequestIDMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Let OPTIONS requests pass through immediately for CORS preflight
+        if scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
         trace_id = str(uuid4())
         scope["state"] = {"trace_id": trace_id}
 
@@ -247,10 +252,13 @@ class RequestIDMiddleware:
 
         await self.app(scope, receive, send_wrapper)
 
-# Register request ID middleware
+# Register request ID middleware first (will be executed after CORS)
+# Note: In FastAPI, middleware is executed in reverse order (last added = first executed)
+# So we add RequestIDMiddleware first, then CORS, so CORS executes first
 app.add_middleware(RequestIDMiddleware)
 
-# Add CORS middleware
+# Add CORS middleware LAST (will be executed FIRST)
+# This ensures CORS headers are properly set for all requests including OPTIONS preflight
 # Allowed origins loaded from config.yaml
 from src.config.settings import get_allowed_origins
 
@@ -262,7 +270,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,  # Restrict to specific origins
     allow_credentials=True,
-    allow_methods=["GET", "POST",
+    allow_methods=["GET", "POST", "DELETE",
                    "OPTIONS"],  # Use the configured list of methods
     allow_headers=["*"
                    ],  # Now allow all headers, but can be restricted further

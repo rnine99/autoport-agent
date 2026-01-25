@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from ptc_cli.core import console
 from ptc_cli.display import show_help
 from ptc_cli.streaming.executor import reconnect_to_workflow, replay_conversation
@@ -191,12 +193,54 @@ async def _handle_view_command(client: "SSEStreamClient", path: str) -> None:
 
     normalized = _normalize_path(path)
 
+    async def _handle_directory_view(dir_path: str) -> None:
+        try:
+            files = await client.list_workspace_files(
+                path=dir_path,
+                include_system=True,
+                pattern="*",
+            )
+        except httpx.HTTPStatusError as e:
+            detail = None
+            try:
+                detail = e.response.json().get("detail")
+            except Exception:
+                pass
+            msg = detail or f"HTTP {e.response.status_code}"
+            console.print(f"[red]{msg}[/red]")
+            return
+
+        console.print(f"[cyan]Directory:[/cyan] {normalized}")
+        if not files:
+            console.print("[dim]No files found[/dim]")
+            return
+
+        for line in _render_tree(files):
+            console.print(line)
+
+    # If the user points at a directory, list its immediate children.
+    is_directory_hint = path.endswith("/") or normalized.endswith("/") or path in (".", "./")
+    if is_directory_hint:
+        await _handle_directory_view(path)
+        return
+
     # If it's a common binary type, download instead of printing.
     lower = normalized.lower()
     is_binary = any(lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"))
 
     if is_binary:
-        content = await client.download_workspace_file(path=path)
+        try:
+            content = await client.download_workspace_file(path=path)
+        except httpx.HTTPStatusError as e:
+            detail = None
+            try:
+                detail = e.response.json().get("detail")
+            except Exception:
+                pass
+            msg = detail or f"HTTP {e.response.status_code}"
+            console.print(f"[red]{msg}[/red]")
+            return
+
         from pathlib import Path
 
         out_path = Path.cwd() / (normalized.split("/")[-1] or "download")
@@ -204,7 +248,24 @@ async def _handle_view_command(client: "SSEStreamClient", path: str) -> None:
         console.print(f"[green]Downloaded:[/green] {out_path}")
         return
 
-    data = await client.read_workspace_file(path=path)
+    try:
+        data = await client.read_workspace_file(path=path)
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        if status_code == 404:
+            # Might be a directory; fall back to listing.
+            await _handle_directory_view(f"{path}/")
+            return
+
+        detail = None
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:
+            pass
+        msg = detail or f"HTTP {status_code}"
+        console.print(f"[red]{msg}[/red]")
+        return
+
     content = str(data.get("content") or "")
     if not content:
         console.print("[yellow]File is empty[/yellow]")
@@ -233,7 +294,18 @@ async def _handle_copy_command(client: "SSEStreamClient", path: str) -> None:
         console.print(f"[red]Workspace not available: {client.workspace_id}[/red]")
         return
 
-    data = await client.read_workspace_file(path=path)
+    try:
+        data = await client.read_workspace_file(path=path)
+    except httpx.HTTPStatusError as e:
+        detail = None
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:
+            pass
+        msg = detail or f"HTTP {e.response.status_code}"
+        console.print(f"[red]{msg}[/red]")
+        return
+
     content = str(data.get("content") or "")
     if not content:
         console.print("[yellow]File not found or empty[/yellow]")
@@ -262,7 +334,17 @@ async def _handle_download_command(client: "SSEStreamClient", remote_path: str, 
         console.print(f"[red]Workspace not available: {client.workspace_id}[/red]")
         return
 
-    content = await client.download_workspace_file(path=remote_path)
+    try:
+        content = await client.download_workspace_file(path=remote_path)
+    except httpx.HTTPStatusError as e:
+        detail = None
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:
+            pass
+        msg = detail or f"HTTP {e.response.status_code}"
+        console.print(f"[red]{msg}[/red]")
+        return
 
     from pathlib import Path
 
@@ -360,6 +442,35 @@ async def handle_command(
                 console.print(f"[green]Model set to:[/green] {model_name}")
             else:
                 console.print("[yellow]Please specify a model name[/yellow]")
+        console.print()
+
+    elif cmd_lower == "/refresh":
+        console.print()
+        try:
+            data = await client.refresh_workspace()
+            console.print("[green]Refreshed sandbox[/green]")
+            msg = data.get("message") if isinstance(data, dict) else None
+            if msg:
+                console.print(f"[dim]{msg}[/dim]")
+        except httpx.HTTPStatusError as e:
+            detail = None
+            try:
+                detail = e.response.json().get("detail")
+            except Exception:
+                pass
+            msg = detail or f"HTTP {e.response.status_code}"
+            console.print(f"[red]{msg}[/red]")
+            console.print()
+            return "handled"
+
+        files = await _handle_files_command(client, show_all=False)
+        session_state.sandbox_files = files
+        completer = getattr(session_state, "sandbox_completer", None)
+        if completer is not None and hasattr(completer, "set_files"):
+            try:
+                completer.set_files(files)
+            except Exception:
+                pass
         console.print()
 
     elif cmd_lower == "/files" or cmd_lower.startswith("/files "):
@@ -608,6 +719,19 @@ async def handle_command(
                 console.print(f"[yellow]Could not cancel workflow: {e}[/yellow]")
         else:
             console.print("[yellow]No active workflow to cancel[/yellow]")
+
+        # Refresh cached file list for autocomplete after stopping.
+        try:
+            files = await _handle_files_command(client, show_all=False)
+            session_state.sandbox_files = files
+            completer = getattr(session_state, "sandbox_completer", None)
+            if completer is not None and hasattr(completer, "set_files"):
+                try:
+                    completer.set_files(files)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     elif cmd_lower == "/conversation":
         # List and open past conversations for this user

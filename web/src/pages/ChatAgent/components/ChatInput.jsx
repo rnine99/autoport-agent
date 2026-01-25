@@ -2,29 +2,18 @@ import React, { useState } from 'react';
 import { Input } from '../../../components/ui/input';
 import { Button } from '../../../components/ui/button';
 import { Plus, Globe, Zap, ChevronDown, Send } from 'lucide-react';
-import { sendChatMessage } from '../utils/api';
 
-const ChatInput = () => {
+const ChatInput = ({ onSend, disabled = false }) => {
   const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
 
-  const handleSend = async () => {
-    if (!message.trim()) {
+  const handleSend = () => {
+    if (!message.trim() || disabled) {
       return;
     }
 
-    setLoading(true);
-    try {
-      const response = await sendChatMessage(message, false);
-      console.log('Chat response:', response);
-      // TODO: Handle the response (e.g., display in chat history)
-      setMessage(''); // Clear input after sending
-    } catch (error) {
-      console.error('Error sending message:', error);
-      // TODO: Show error message to user
-    } finally {
-      setLoading(false);
-    }
+    onSend(message, planMode);
+    setMessage(''); // Clear input after sending
   };
 
   const handleKeyPress = (e) => {
@@ -35,37 +24,69 @@ const ChatInput = () => {
   };
 
   return (
-    <div className="flex items-center space-x-2 p-4 bg-card rounded-lg border border-border">
-      <Plus className="h-5 w-5 text-muted-foreground cursor-pointer hover:text-foreground" />
+    <div 
+      className="flex items-center gap-2 p-3 rounded-lg"
+      style={{ 
+        backgroundColor: 'rgba(10, 10, 10, 0.65)',
+        border: '1.5px solid hsl(var(--primary))',
+      }}
+    >
+      <button 
+        className="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:bg-white/5"
+        style={{ color: '#BBBBBB' }}
+      >
+        <Plus className="h-4 w-4" />
+      </button>
       <Input 
         placeholder="What would you like to know?" 
-        className="flex-1 bg-background border-border"
+        className="flex-1 h-9 rounded-md text-sm focus-visible:ring-0 focus-visible:ring-offset-0 focus:outline-none"
+        style={{ 
+          backgroundColor: 'transparent',
+          border: 'none',
+          color: '#BBBBBB',
+          fontSize: '14px',
+        }}
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         onKeyPress={handleKeyPress}
-        disabled={loading}
+        disabled={disabled}
       />
-      <div className="flex items-center space-x-2">
-        <Button variant="ghost" size="sm" className="h-9">
-          <Globe className="h-4 w-4 mr-2" />
-          Agent
-        </Button>
-        <Button variant="ghost" size="sm" className="h-9">
-          <Zap className="h-4 w-4 mr-2" />
-          Fast
-        </Button>
-        <Button variant="ghost" size="sm" className="h-9">
-          Tool
-          <ChevronDown className="h-4 w-4 ml-2" />
-        </Button>
-        <Button 
-          size="icon" 
-          className="h-10 w-10 rounded-full bg-primary hover:bg-primary/90"
+      <div className="flex items-center gap-1">
+        <button 
+          className="flex items-center gap-1.5 px-2 py-1.5 rounded-full transition-colors hover:bg-white/5"
+          style={{ color: '#BBBBBB' }}
+        >
+          <Globe className="h-4 w-4" />
+          <span className="text-sm font-medium">Agent</span>
+        </button>
+        <button 
+          className={`flex items-center gap-1.5 px-2 py-1.5 rounded-full transition-colors ${
+            planMode ? 'bg-white/100' : 'hover:bg-white/5'
+          }`}
+          style={{ color: '#BBBBBB' }}
+          onClick={() => setPlanMode(!planMode)}
+        >
+          <Zap className="h-4 w-4" />
+          <span className="text-sm font-medium">Plan Mode</span>
+        </button>
+        <button 
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-colors hover:bg-white/5"
+          style={{ color: '#BBBBBB' }}
+        >
+          <span className="text-sm font-medium">Tool</span>
+          <ChevronDown className="h-4 w-4" />
+        </button>
+        <button 
+          className="w-8 h-9 rounded-md flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ 
+            backgroundColor: disabled ? 'rgba(97, 85, 245, 0.5)' : '#6155F5',
+            color: '#FFFFFF',
+          }}
           onClick={handleSend}
-          disabled={loading || !message.trim()}
+          disabled={disabled || !message.trim()}
         >
           <Send className="h-4 w-4" />
-        </Button>
+        </button>
       </div>
     </div>
   );

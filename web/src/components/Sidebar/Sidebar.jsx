@@ -45,7 +45,11 @@ function Sidebar() {
       <nav className="sidebar-nav">
         {menuItems.map((item) => {
           const Icon = item.icon;
-          const isActive = location.pathname === item.key;
+          // For chat route, check if pathname starts with '/chat' to include workspace routes
+          // For other routes, use exact match
+          const isActive = item.key === '/chat' 
+            ? location.pathname.startsWith('/chat')
+            : location.pathname === item.key;
           
           return (
             <button

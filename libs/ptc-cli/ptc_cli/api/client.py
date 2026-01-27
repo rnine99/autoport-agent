@@ -361,11 +361,9 @@ class SSEStreamClient:
             raise ValueError("workspace_id is required. Create a workspace first via POST /workspaces")
 
         request_body = {
-            "user_id": self.user_id,
             "workspace_id": self.workspace_id,
             "thread_id": thread_id or self.thread_id or "__default__",
             "messages": [{"role": "user", "content": message}] if message else [],
-            "track_tokens": True,
             "plan_mode": plan_mode,
         }
 
@@ -387,7 +385,7 @@ class SSEStreamClient:
             "POST",
             url,
             json=request_body,
-            headers={"Accept": "text/event-stream"},
+            headers={"Accept": "text/event-stream", "X-User-Id": self.user_id},
             timeout=self.timeout,
         ) as response:
             response.raise_for_status()

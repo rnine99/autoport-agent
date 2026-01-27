@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
-from src.server.database.workspace_db import get_workspace as db_get_workspace
+from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_manager import WorkspaceManager
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Workspace Files"])
@@ -134,7 +134,7 @@ async def list_workspace_files(
     _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
 
     manager = WorkspaceManager.get_instance()
-    session = await manager.get_session_for_workspace(workspace_id)
+    session = await manager.get_session_for_workspace(workspace_id, user_id=x_user_id)
 
     sandbox = getattr(session, "sandbox", None)
     if sandbox is None:
@@ -181,7 +181,7 @@ async def read_workspace_file(
     _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
 
     manager = WorkspaceManager.get_instance()
-    session = await manager.get_session_for_workspace(workspace_id)
+    session = await manager.get_session_for_workspace(workspace_id, user_id=x_user_id)
 
     sandbox = getattr(session, "sandbox", None)
     if sandbox is None:
@@ -225,7 +225,7 @@ async def download_workspace_file(
     _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
 
     manager = WorkspaceManager.get_instance()
-    session = await manager.get_session_for_workspace(workspace_id)
+    session = await manager.get_session_for_workspace(workspace_id, user_id=x_user_id)
 
     sandbox = getattr(session, "sandbox", None)
     if sandbox is None:
@@ -266,7 +266,7 @@ async def upload_workspace_file(
     _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
 
     manager = WorkspaceManager.get_instance()
-    session = await manager.get_session_for_workspace(workspace_id)
+    session = await manager.get_session_for_workspace(workspace_id, user_id=x_user_id)
 
     sandbox = getattr(session, "sandbox", None)
     if sandbox is None:

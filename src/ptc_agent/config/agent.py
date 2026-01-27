@@ -40,26 +40,24 @@ class SkillsConfig(BaseModel):
 
     enabled: bool = True
     user_skills_dir: str = "~/.ptc-agent/skills"
-    project_skills_dir: str = ".ptc-agent/skills"
+    project_skills_dir: str = "skills"  # Project skills directory (relative to project root)
     sandbox_skills_base: str = "/home/daytona/skills"  # Where skills live in sandbox
 
     def local_skill_dirs_with_sandbox(self, *, cwd: Path | None = None) -> list[tuple[str, str]]:
         """Return ordered (local_dir, sandbox_dir) sources.
 
-        Precedence is last-wins (later sources override earlier ones). We support
-        both a legacy `skills/` project directory and the current `.ptc-agent/skills`
-        default.
+        Precedence is last-wins (later sources override earlier ones).
+        Order: user skills < project skills (project wins on conflict).
         """
         base = cwd or Path.cwd()
 
         user_dir = str(Path(self.user_skills_dir).expanduser())
         project_dir = str((base / self.project_skills_dir).resolve())
-        legacy_project_dir = str((base / "skills").resolve())
 
-        sources: list[tuple[str, str]] = [(user_dir, self.sandbox_skills_base)]
-        if legacy_project_dir != project_dir:
-            sources.append((legacy_project_dir, self.sandbox_skills_base))
-        sources.append((project_dir, self.sandbox_skills_base))
+        sources: list[tuple[str, str]] = [
+            (user_dir, self.sandbox_skills_base),
+            (project_dir, self.sandbox_skills_base),
+        ]
         return sources
 
 
@@ -250,7 +248,7 @@ class AgentConfig(BaseModel):
         skills_config = SkillsConfig(
             enabled=kwargs.pop("skills_enabled", True),
             user_skills_dir=kwargs.pop("user_skills_dir", "~/.ptc-agent/skills"),
-            project_skills_dir=kwargs.pop("project_skills_dir", ".ptc-agent/skills"),
+            project_skills_dir=kwargs.pop("project_skills_dir", "skills"),
             sandbox_skills_base=kwargs.pop("sandbox_skills_base", "/home/daytona/skills"),
         )
 

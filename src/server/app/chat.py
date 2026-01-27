@@ -37,13 +37,13 @@ from src.server.handlers.streaming_handler import WorkflowStreamHandler
 from ptc_agent.agent.graph import build_ptc_graph, build_ptc_graph_with_session
 from src.server.services.session_manager import SessionService, get_session_provider
 from src.server.services.workspace_manager import WorkspaceManager
-from src.server.database.workspace_db import update_workspace_activity
+from src.server.database.workspace import update_workspace_activity
 from src.server.services.background_task_manager import BackgroundTaskManager, TaskStatus
 from src.server.services.background_registry_store import BackgroundRegistryStore
 from src.server.services.workflow_tracker import WorkflowTracker
 
 # Database persistence imports
-from src.server.database import conversation_db as qr_db
+from src.server.database import conversation as qr_db
 from src.server.services.conversation_persistence_service import ConversationPersistenceService
 
 # Token and tool tracking imports
@@ -58,11 +58,11 @@ from src.tools.decorators import ToolUsageTracker
 # File operation tracking
 from src.server.services.file_logger import FileOperationLogger
 
-# State restoration imports
-from src.server.utils.state_restoration import (
-    parse_last_thread_id,
-    restore_state_with_fallback,
+from src.server.utils.skill_context import (
+    parse_skill_contexts,
+    build_skill_prefix_message,
 )
+from src.server.utils.api import CurrentUserId
 
 # Locale/timezone configuration
 from src.config.settings import (
@@ -81,7 +81,7 @@ router = APIRouter(prefix="/api/v1/chat", tags=["Chat"])
 
 
 @router.post("/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, user_id: CurrentUserId):
     """
     Stream PTC agent responses as Server-Sent Events.
 
@@ -93,12 +93,12 @@ async def chat_stream(request: ChatRequest):
 
     Args:
         request: ChatRequest with messages and configuration (workspace_id required)
+        user_id: User ID from X-User-Id header
 
     Returns:
         StreamingResponse with SSE events
     """
-    # Extract identity fields
-    user_id = request.user_id
+    # Extract identity fields (user_id from header, workspace_id from body)
     workspace_id = request.workspace_id
     thread_id = request.thread_id
     if thread_id == "__default__":
@@ -171,6 +171,9 @@ async def _astream_workflow(
     start_time = time.time()
     handler = None
     persistence_service = None
+    token_callback = None
+    tool_tracker = None
+    ptc_graph = None
 
     # Start execution tracking to capture agent messages
     ExecutionTracker.start_tracking()
@@ -189,7 +192,7 @@ async def _astream_workflow(
         # =====================================================================
 
         # Determine query type based on whether this is an interrupt resume
-        is_resume = request.hitl_response or request.interrupt_feedback
+        is_resume = bool(request.hitl_response)
         query_type = "resume_feedback" if is_resume else "initial"
 
         # Ensure thread exists in database (linked to workspace)
@@ -226,9 +229,6 @@ async def _astream_workflow(
             feedback_action = summary["feedback_action"]
             query_content = summary["content"]
             query_metadata["hitl_interrupt_ids"] = summary["interrupt_ids"]
-        elif request.interrupt_feedback:
-            # Legacy string-based feedback (deprecated).
-            feedback_action = request.interrupt_feedback
 
         await persistence_service.persist_query_start(
             content=query_content,
@@ -277,20 +277,14 @@ async def _astream_workflow(
         # Phase 3: Token and Tool Tracking
         # =====================================================================
 
-        # Initialize variables that may be used in error handling
-        ptc_graph = None
-        token_callback = None
-
-        # Initialize token tracking if enabled
+        # Initialize token tracking (always enabled)
         token_callback = TokenTrackingManager.initialize_tracking(
             thread_id=thread_id,
-            track_tokens=request.track_tokens
+            track_tokens=True
         )
 
         # Create tool tracker for infrastructure cost tracking
-        tool_tracker = None
-        if request.track_tokens:
-            tool_tracker = ToolUsageTracker(thread_id=thread_id)
+        tool_tracker = ToolUsageTracker(thread_id=thread_id)
 
         # =====================================================================
         # Session and Graph Setup
@@ -319,7 +313,7 @@ async def _astream_workflow(
         # Use WorkspaceManager for workspace-based sessions
         logger.info(f"[PTC_CHAT] Using workspace: {workspace_id}")
         workspace_manager = WorkspaceManager.get_instance()
-        session = await workspace_manager.get_session_for_workspace(workspace_id)
+        session = await workspace_manager.get_session_for_workspace(workspace_id, user_id=user_id)
 
         # Update workspace activity
         await update_workspace_activity(workspace_id)
@@ -335,6 +329,7 @@ async def _astream_workflow(
             operation_callback=operation_callback,
             checkpointer=setup.checkpointer,
             background_registry=background_registry,
+            user_id=user_id,
         )
 
         if session.sandbox:
@@ -342,33 +337,6 @@ async def _astream_workflow(
 
         # Store graph for persistence snapshots
         setup.graph = ptc_graph
-
-        # =====================================================================
-        # State Restoration (from additional_context)
-        # =====================================================================
-
-        restored_state = None
-        last_thread_id = parse_last_thread_id(request.additional_context)
-
-        if last_thread_id:
-            logger.info(f"[PTC_CHAT] Attempting state restoration from thread: {last_thread_id}")
-
-            # Restore state from the previous thread
-            restored_state = await restore_state_with_fallback(
-                graph=ptc_graph,
-                last_thread_id=last_thread_id
-            )
-
-            if restored_state:
-                logger.info(
-                    f"[PTC_CHAT] State restored from thread {last_thread_id}: "
-                    f"messages={len(restored_state.get('messages', []))}"
-                )
-            else:
-                logger.warning(
-                    f"[PTC_CHAT] Failed to restore state from thread {last_thread_id}, "
-                    f"starting fresh"
-                )
 
         # Build input state from messages
         messages = []
@@ -386,6 +354,26 @@ async def _astream_workflow(
                             content_items.append({"type": "image_url", "image_url": item.image_url})
                 messages.append({"role": msg.role, "content": content_items or str(msg.content)})
 
+        # =====================================================================
+        # Skill Context Injection
+        # =====================================================================
+        # When skills are requested via additional_context, load SKILL.md content
+        # and prepend as a separate message before user messages.
+        # The original user_input is preserved for database persistence.
+        skill_contexts = parse_skill_contexts(request.additional_context)
+        if skill_contexts and not request.hitl_response:
+            # Get skill directories from config
+            skill_dirs = [
+                local_dir for local_dir, _ in config.skills.local_skill_dirs_with_sandbox()
+            ]
+            skill_prefix_msg = build_skill_prefix_message(skill_contexts, skill_dirs=skill_dirs)
+            if skill_prefix_msg:
+                # Insert skill message before user messages
+                messages.insert(0, skill_prefix_msg)
+                logger.info(
+                    f"[PTC_CHAT] Skill context injected: {[s.name for s in skill_contexts]}"
+                )
+
         # Build input state or resume command
         if request.hitl_response:
             # Structured HITL resume payload.
@@ -396,27 +384,6 @@ async def _astream_workflow(
             logger.info(
                 f"[PTC_RESUME] thread_id={thread_id} "
                 f"hitl_response keys={list(request.hitl_response.keys())}"
-            )
-        elif request.interrupt_feedback:
-            # Legacy: String-based feedback (deprecated but still supported)
-            resume_msg = f"[{request.interrupt_feedback}]"
-            if user_input:
-                resume_msg += f" {user_input}"
-            input_state = Command(resume=resume_msg)
-            logger.info(f"[PTC_RESUME] thread_id={thread_id} feedback={request.interrupt_feedback}")
-        elif restored_state:
-            # Merge restored state with new messages
-            # For PTC, we preserve the restored messages and append new ones
-            existing_messages = restored_state.get("messages", [])
-
-            # Build merged state
-            input_state = dict(restored_state)
-            input_state["messages"] = existing_messages + messages
-            input_state["current_agent"] = "ptc"  # For FileOperationMiddleware SSE events
-
-            logger.info(
-                f"[PTC_CHAT] Merged state: {len(existing_messages)} existing + "
-                f"{len(messages)} new messages"
             )
         else:
             input_state = {
@@ -429,7 +396,7 @@ async def _astream_workflow(
         # =====================================================================
         # When plan_mode is enabled, inject a reminder for the agent to create
         # a plan and submit it for approval before executing any changes.
-        if request.plan_mode and not request.hitl_response and not request.interrupt_feedback:
+        if request.plan_mode and not request.hitl_response:
             plan_mode_reminder = (
                 "\n\n[PLAN MODE ENABLED]\n"
                 "Before making any changes, you MUST:\n"
@@ -472,13 +439,15 @@ async def _astream_workflow(
             timezone=timezone_str,
             deepthinking=False,
             auto_accepted_plan=False,
-            track_tokens=request.track_tokens,
+            track_tokens=True,
         )
 
         # Build LangGraph config
         config = {
             "configurable": {
                 "thread_id": thread_id,
+                "user_id": user_id,           # For user-scoped tools
+                "workspace_id": workspace_id,  # For workspace-scoped tools
             },
             "recursion_limit": 1000,
             "tags": langsmith_tags,
@@ -488,8 +457,8 @@ async def _astream_workflow(
         if request.checkpoint_id:
             config["configurable"]["checkpoint_id"] = request.checkpoint_id
 
-        # Add callbacks to config if token tracking is enabled
-        if request.track_tokens and token_callback:
+        # Add token tracking callbacks
+        if token_callback:
             config["callbacks"] = [token_callback]
 
         # Extract background task registry from orchestrator (single source of truth for SSE events)
@@ -502,7 +471,7 @@ async def _astream_workflow(
         # Reuse WorkflowStreamHandler for SSE streaming
         handler = WorkflowStreamHandler(
             thread_id=thread_id,
-            track_tokens=request.track_tokens,
+            track_tokens=True,
             token_callback=token_callback,
             tool_tracker=tool_tracker,
             background_registry=background_registry,
@@ -615,7 +584,7 @@ async def _astream_workflow(
                 )
 
         # Clear event buffer when resuming from interrupt
-        if request.hitl_response or request.interrupt_feedback:
+        if request.hitl_response:
             logger.info(f"[PTC_CHAT] Clearing event buffer for interrupt resume: {thread_id}")
             await manager.clear_event_buffer(thread_id)
 

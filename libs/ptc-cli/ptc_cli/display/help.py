@@ -30,6 +30,7 @@ def show_help() -> None:
   /workspace                    List/switch/start/stop workspaces
   /conversation                 List/open past conversations
   /reconnect                    Reconnect to running workflow after ESC
+  /onboarding                   Start user profile onboarding flow
   /files [all]                  List files (all=include system dirs)
   /refresh                      Refresh tools + skills in sandbox
   /view <path>                  View file content (supports images)

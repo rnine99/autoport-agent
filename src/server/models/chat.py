@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from src.server.models.additional_context import LastThreadContext
+from src.server.models.additional_context import AdditionalContext
 
 
 # =============================================================================
@@ -146,11 +146,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     """Request model for streaming chat endpoint."""
 
-    # Identity fields
-    user_id: str = Field(
-        default="test_user_001",
-        description="User identifier"
-    )
+    # Identity fields (user_id comes from X-User-Id header)
     workspace_id: str = Field(
         ...,
         description="Workspace identifier - required. Create workspace first via POST /workspaces"
@@ -164,12 +160,6 @@ class ChatRequest(BaseModel):
     messages: List[ChatMessage] = Field(
         default_factory=list,
         description="History of messages between the user and the assistant"
-    )
-
-    # Logging and tracking
-    track_tokens: bool = Field(
-        default=True,
-        description="Whether to track token usage"
     )
 
     # Agent options
@@ -186,21 +176,11 @@ class ChatRequest(BaseModel):
         description="When True, agent must submit a plan for approval via submit_plan tool before execution"
     )
 
-    # Session management (legacy - kept for direct sandbox access)
-    sandbox_id: Optional[str] = Field(
-        default=None,
-        description="Existing sandbox ID to reconnect to (legacy, for direct sandbox access)"
-    )
-
     # Interrupt/resume support (HITL)
     hitl_response: Optional[Dict[str, HITLResponse]] = Field(
         default=None,
         description="Structured HITL response: {interrupt_id: HITLResponse}. "
                     "Use this to respond to interrupt events with approve/reject decisions."
-    )
-    interrupt_feedback: Optional[str] = Field(
-        default=None,
-        description="[DEPRECATED] Use hitl_response instead. Legacy string feedback for plan review."
     )
     checkpoint_id: Optional[str] = Field(
         default=None,
@@ -217,10 +197,10 @@ class ChatRequest(BaseModel):
         description="IANA timezone identifier (e.g., 'America/New_York', 'Asia/Shanghai')"
     )
 
-    # State restoration
-    additional_context: Optional[List[LastThreadContext]] = Field(
+    # Skill loading
+    additional_context: Optional[List[AdditionalContext]] = Field(
         default=None,
-        description="Additional context to be included. Supports: last_thread (state restoration)"
+        description="Additional context to be included. Supports: skills (skill instructions)"
     )
 
     # LLM selection (optional - defaults to agent_config.yaml setting)

@@ -9,7 +9,7 @@ import httpx
 
 from ptc_cli.core import console
 from ptc_cli.display import show_help
-from ptc_cli.streaming.executor import reconnect_to_workflow, replay_conversation
+from ptc_cli.streaming.executor import execute_task, reconnect_to_workflow, replay_conversation
 
 
 async def _select_or_create_workspace_interactive(
@@ -855,11 +855,60 @@ async def handle_command(
                 console.print("[yellow]No workflow sessions to reconnect to[/yellow]")
                 console.print("[dim]Start a task first, then use ESC to soft-interrupt.[/dim]")
 
+    elif cmd_lower == "/onboarding":
+        # Start user onboarding flow with user-profile skill
+        console.print()
+
+        # Ensure we have a workspace first
+        if not client.workspace_id:
+            console.print("[yellow]No workspace selected.[/yellow]")
+            workspace_id = await _select_or_create_workspace_interactive(client)
+            if not workspace_id:
+                console.print("[dim]Cancelled[/dim]")
+                console.print()
+                return "handled"
+            client.workspace_id = workspace_id
+
+        if not await _ensure_workspace_running(client, client.workspace_id):
+            console.print(f"[red]Workspace not available: {client.workspace_id}[/red]")
+            console.print()
+            return "handled"
+
+        # Start a fresh conversation thread for onboarding
+        session_state.reset_thread()
+        client.thread_id = session_state.thread_id
+
+        console.print("[cyan]Starting onboarding...[/cyan]")
+        console.print(f"[dim]Thread: {client.thread_id}[/dim]")
+        console.print()
+
+        # Build skill context for user-profile onboarding
+        additional_context = [
+            {
+                "type": "skills",
+                "name": "user-profile",
+                "instruction": """Help the user with first time onboarding. referecen the skills/user-profile/onboarding.md for more details.
+                You should use load_skill tool to load the user-profile skill before calling any of the tools.
+                """
+            }
+        ]
+
+        # Execute with onboarding prompt
+        await execute_task(
+            user_input="Hi! I'm new here and would like to set up my profile.",
+            client=client,
+            assistant_id=None,
+            session_state=session_state,
+            token_tracker=token_tracker,
+            additional_context=additional_context,
+        )
+        return "handled"
+
     else:
         # Unknown command
         console.print(f"[yellow]Unknown command: {command}[/yellow]")
         console.print(
-            "[dim]Available: /help, /new, /workspace, /conversation, /tokens, /model, /status, /cancel, /reconnect, /exit[/dim]"
+            "[dim]Available: /help, /new, /workspace, /conversation, /tokens, /model, /status, /cancel, /reconnect, /onboarding, /exit[/dim]"
         )
 
     return "handled"

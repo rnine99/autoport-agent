@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from src.server.models.additional_context import LastThreadContext
+from src.server.models.additional_context import AdditionalContext
 
 
 # =============================================================================
@@ -146,11 +146,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     """Request model for streaming chat endpoint."""
 
-    # Identity fields
-    user_id: str = Field(
-        default="test_user_001",
-        description="User identifier"
-    )
+    # Identity fields (user_id comes from X-User-Id header)
     workspace_id: str = Field(
         ...,
         description="Workspace identifier - required. Create workspace first via POST /workspaces"
@@ -217,10 +213,10 @@ class ChatRequest(BaseModel):
         description="IANA timezone identifier (e.g., 'America/New_York', 'Asia/Shanghai')"
     )
 
-    # State restoration
-    additional_context: Optional[List[LastThreadContext]] = Field(
+    # Skill loading
+    additional_context: Optional[List[AdditionalContext]] = Field(
         default=None,
-        description="Additional context to be included. Supports: last_thread (state restoration)"
+        description="Additional context to be included. Supports: skills (skill instructions)"
     )
 
     # LLM selection (optional - defaults to agent_config.yaml setting)

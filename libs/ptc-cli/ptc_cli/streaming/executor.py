@@ -267,6 +267,7 @@ async def execute_task(
     assistant_id: str | None,
     session_state: "SessionState",
     token_tracker: TokenTracker | None = None,
+    additional_context: list[dict[str, Any]] | None = None,
 ) -> None:
     """Execute task via server API.
 
@@ -276,6 +277,7 @@ async def execute_task(
         assistant_id: Agent identifier
         session_state: Session state with settings
         token_tracker: Optional token tracker
+        additional_context: Optional list of context items (e.g., skill contexts)
     """
     from ptc_cli.core.state import ReconnectStateManager
 
@@ -358,6 +360,11 @@ async def execute_task(
         pass
 
     try:
+        # Build optional kwargs for stream_chat
+        stream_kwargs: dict[str, Any] = {}
+        if additional_context:
+            stream_kwargs["additional_context"] = additional_context
+
         # Stream from API
         async for event_type, event_data in client.stream_chat(
             message=user_input,
@@ -365,6 +372,7 @@ async def execute_task(
             hitl_response=hitl_response,
             plan_mode=getattr(session_state, "plan_mode", False),
             llm_model=getattr(session_state, "llm_model", None),
+            **stream_kwargs,
         ):
             # Track thread_id from events
             if "thread_id" in event_data:

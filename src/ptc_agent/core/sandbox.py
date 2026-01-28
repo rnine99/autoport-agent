@@ -434,6 +434,16 @@ class PTCSandbox:
 
         logger.info("Tools and MCP servers ready", sandbox_id=self.sandbox_id)
 
+    async def ensure_sandbox_ready(self) -> None:
+        if not self.sandbox:
+            raise RuntimeError("Sandbox not initialized")
+
+        work_dir = await self._daytona_call(
+            self.sandbox.get_work_dir,
+            retry_policy=_DaytonaRetryPolicy.SAFE,
+        )
+        self._work_dir = work_dir
+
     async def refresh_tools(self) -> dict[str, Any]:
         """Rebuild sandbox tool modules and upload internal packages.
 
@@ -443,11 +453,38 @@ class PTCSandbox:
             raise RuntimeError("Sandbox not initialized")
 
         async with self._tool_refresh_lock:
-            await self._upload_mcp_server_files()
+            await self.ensure_sandbox_ready()
+            await self._prune_disabled_tool_modules()
+            await self._upload_mcp_server_files(force_refresh=True)
             await self._upload_internal_packages()
             await self._install_tool_modules()
+            try:
+                await self._start_internal_mcp_servers()
+            except Exception as e:
+                logger.warning("Failed to refresh MCP servers", error=str(e))
 
         return {"success": True}
+
+    async def sync_tools(self) -> dict[str, Any]:
+        """Refresh tool modules if MCP config changed."""
+        if not self.sandbox:
+            raise RuntimeError("Sandbox not initialized")
+
+        async with self._tool_refresh_lock:
+            await self.ensure_sandbox_ready()
+            await self._prune_disabled_tool_modules()
+            changed = await self._upload_mcp_server_files(force_refresh=False)
+            if not changed:
+                return {"success": True, "refreshed": False}
+
+            await self._upload_internal_packages()
+            await self._install_tool_modules()
+            try:
+                await self._start_internal_mcp_servers()
+            except Exception as e:
+                logger.warning("Failed to refresh MCP servers", error=str(e))
+
+        return {"success": True, "refreshed": True}
 
     async def setup(self) -> None:
         """Set up the sandbox environment.
@@ -682,18 +719,45 @@ class PTCSandbox:
             sandbox_root=str(internal_root),
         )
 
-    async def _upload_mcp_server_files(self) -> None:
+    def _compute_mcp_manifest(self, expected_files: set[str]) -> dict[str, Any]:
+        files = sorted(expected_files)
+        payload = "\n".join(files)
+        version = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return {"version": version, "files": files}
+
+    async def _read_mcp_manifest(self, mcp_servers_dir: str) -> dict[str, Any] | None:
+        manifest_path = f"{mcp_servers_dir}/.mcp_manifest.json"
+        manifest_text = await self.aread_file_text(manifest_path)
+        if not manifest_text:
+            return None
+        try:
+            parsed = json.loads(manifest_text)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            return None
+        return None
+
+    async def _write_mcp_manifest(self, mcp_servers_dir: str, manifest: dict[str, Any]) -> None:
+        manifest_path = f"{mcp_servers_dir}/.mcp_manifest.json"
+        await self.awrite_file_text(manifest_path, json.dumps(manifest))
+
+    async def _upload_mcp_server_files(self, *, force_refresh: bool = False) -> bool:
         """Upload custom Python MCP server files to sandbox.
 
         For Python MCP servers configured with 'uv run python mcp_servers/xxx.py',
         this method uploads the Python files to the sandbox so they can be executed
         as subprocesses inside the sandbox environment.
+
+        Returns:
+            True if MCP files were refreshed.
         """
         work_dir = getattr(self, "_work_dir", "/home/daytona")
         mcp_servers_dir = f"{work_dir}/mcp_servers"
 
         # Collect files to upload
         files_to_upload = []
+        expected_files: set[str] = set()
 
         # Get config file directory
         config_dir = getattr(self.config, "config_file_dir", None)
@@ -729,6 +793,7 @@ class PTCSandbox:
                     if resolved_path:
                         filename = Path(resolved_path).name
                         sandbox_path = f"{mcp_servers_dir}/{filename}"
+                        expected_files.add(filename)
                         files_to_upload.append((server.name, resolved_path, sandbox_path))
                     else:
                         searched_paths = [local_path]
@@ -740,24 +805,55 @@ class PTCSandbox:
                             searched_paths=searched_paths,
                         )
 
-        # If we have files to upload, create directory and upload in parallel
-        if files_to_upload:
-            assert self.sandbox is not None
-            await self._daytona_call(
-                self.sandbox.process.exec,
-                f"mkdir -p {mcp_servers_dir}",
-                retry_policy=_DaytonaRetryPolicy.SAFE,
-            )
+        assert self.sandbox is not None
+        sandbox = self.sandbox
 
+        manifest = self._compute_mcp_manifest(expected_files)
+        remote_manifest = await self._read_mcp_manifest(mcp_servers_dir)
+        remote_version = remote_manifest.get("version") if remote_manifest else None
+        should_refresh = force_refresh or remote_version != manifest["version"]
+        if not should_refresh:
+            return False
+
+        await self._daytona_call(
+            sandbox.process.exec,
+            f"mkdir -p {mcp_servers_dir}",
+            retry_policy=_DaytonaRetryPolicy.SAFE,
+        )
+
+        existing_entries = await self.als_directory(mcp_servers_dir)
+        if existing_entries:
+            files_to_remove = [
+                entry["path"]
+                for entry in existing_entries
+                if not entry.get("is_dir", False)
+                and entry.get("name") not in expected_files
+                and entry.get("name") != ".mcp_manifest.json"
+            ]
+            if files_to_remove:
+                async def remove_one(path: str) -> None:
+                    await self._daytona_call(
+                        sandbox.process.exec,
+                        f"rm -f {shlex.quote(path)}",
+                        retry_policy=_DaytonaRetryPolicy.SAFE,
+                    )
+
+                await asyncio.gather(*[remove_one(path) for path in files_to_remove])
+                logger.info(
+                    "Pruned MCP server files",
+                    removed=len(files_to_remove),
+                    sandbox_root=mcp_servers_dir,
+                )
+
+        if files_to_upload:
             async def upload_file(server_name: str, local_path: str, sandbox_path: str) -> None:
                 # Read file from host using aiofiles to avoid blocking
                 async with aiofiles.open(local_path) as f:
                     content = await f.read()
 
                 # Upload to sandbox
-                assert self.sandbox is not None
                 await self._daytona_call(
-                    self.sandbox.fs.upload_file,
+                    sandbox.fs.upload_file,
                     content.encode("utf-8"),
                     sandbox_path,
                     retry_policy=_DaytonaRetryPolicy.SAFE,
@@ -775,6 +871,34 @@ class PTCSandbox:
                 upload_file(server_name, local_path, sandbox_path)
                 for server_name, local_path, sandbox_path in files_to_upload
             ])
+
+        await self._write_mcp_manifest(mcp_servers_dir, manifest)
+        return True
+
+    async def _prune_disabled_tool_modules(self) -> None:
+        if not self.sandbox:
+            return
+
+        sandbox = self.sandbox
+        disabled = [server.name for server in self.config.mcp.servers if not server.enabled]
+        if not disabled:
+            return
+
+        work_dir = getattr(self, "_work_dir", "/home/daytona")
+        paths: list[str] = []
+        for name in disabled:
+            paths.append(f"{work_dir}/tools/{name}.py")
+            paths.append(f"{work_dir}/tools/docs/{name}")
+
+        async def remove_one(path: str) -> None:
+            await self._daytona_call(
+                sandbox.process.exec,
+                f"rm -rf {shlex.quote(path)}",
+                retry_policy=_DaytonaRetryPolicy.SAFE,
+            )
+
+        await asyncio.gather(*[remove_one(path) for path in paths])
+        logger.info("Pruned disabled tool modules", removed=len(paths))
 
     SKILLS_MANIFEST_FILENAME = ".skills_manifest.json"
 
@@ -803,6 +927,7 @@ class PTCSandbox:
             "timed out",
             "timeout",
             "service unavailable",
+            "no ip address found",
             "502",
             "503",
             "504",
@@ -935,11 +1060,66 @@ class PTCSandbox:
 
         return await asyncio.to_thread(build)
 
+    async def _collect_local_skill_names(self, local_skill_roots: list[str]) -> set[str]:
+        def build() -> set[str]:
+            names: set[str] = set()
+            for root_str in local_skill_roots:
+                root = Path(root_str).expanduser()
+                if not root.exists():
+                    continue
+                for skill_dir in root.iterdir():
+                    if not skill_dir.is_dir():
+                        continue
+                    if not (skill_dir / "SKILL.md").exists():
+                        continue
+                    names.add(skill_dir.name)
+            return names
+
+        return await asyncio.to_thread(build)
+
+    async def _prune_remote_skills(self, sandbox_base: str, local_skill_names: set[str]) -> None:
+        assert self.sandbox is not None
+        sandbox = self.sandbox
+        entries = await self.als_directory(sandbox_base)
+        if not entries:
+            return
+
+        paths_to_remove: list[str] = []
+        for entry in entries:
+            name = entry.get("name")
+            if not name:
+                continue
+            if name == self.SKILLS_MANIFEST_FILENAME:
+                if not local_skill_names:
+                    paths_to_remove.append(entry["path"])
+                continue
+            if entry.get("is_dir", False):
+                if name not in local_skill_names:
+                    paths_to_remove.append(entry["path"])
+
+        if not paths_to_remove:
+            return
+
+        async def remove_one(path: str) -> None:
+            await self._daytona_call(
+                sandbox.process.exec,
+                f"rm -rf {shlex.quote(path)}",
+                retry_policy=_DaytonaRetryPolicy.SAFE,
+            )
+
+        await asyncio.gather(*[remove_one(path) for path in paths_to_remove])
+        logger.info(
+            "Pruned skills from sandbox",
+            removed=len(paths_to_remove),
+            sandbox_root=sandbox_base,
+        )
+
     async def sync_skills(
         self,
         local_skills_dirs: list[tuple[str, str]],
         *,
         reusing_sandbox: bool,
+        force_refresh: bool = False,
         on_progress: Callable[[str], None] | None = None,
     ) -> bool:
         """Ensure skills are present in the sandbox.
@@ -951,6 +1131,7 @@ class PTCSandbox:
             local_skills_dirs: Ordered list of (local_path, sandbox_path) sources.
                 Later entries override earlier ones.
             reusing_sandbox: Whether we reconnected to an existing sandbox.
+            force_refresh: Force pruning/upload regardless of manifest.
             on_progress: Optional callback for reporting progress.
 
         Returns:
@@ -958,9 +1139,6 @@ class PTCSandbox:
         """
         local_roots = [local_dir for local_dir, _ in local_skills_dirs]
         local_manifest = await self._compute_skills_manifest(local_roots)
-
-        if not local_manifest.get("files"):
-            return False
 
         sandbox_base = local_skills_dirs[-1][1].rstrip("/")
         manifest_path = f"{sandbox_base}/{self.SKILLS_MANIFEST_FILENAME}"
@@ -977,15 +1155,20 @@ class PTCSandbox:
 
         remote_version = remote_manifest.get("version") if remote_manifest else None
         local_version = local_manifest.get("version")
+        should_refresh = force_refresh or (not reusing_sandbox) or (remote_version != local_version)
+        if not should_refresh:
+            return False
 
-        should_upload = (not reusing_sandbox) or (remote_version != local_version)
-        if should_upload:
-            if on_progress:
-                on_progress("Uploading skills...")
-            await self._upload_skills(local_skills_dirs)
-            return True
+        local_skill_names = await self._collect_local_skill_names(local_roots)
+        await self._prune_remote_skills(sandbox_base, local_skill_names)
 
-        return False
+        if not local_manifest.get("files"):
+            return False
+
+        if on_progress:
+            on_progress("Uploading skills...")
+        await self._upload_skills(local_skills_dirs)
+        return True
 
     async def _upload_skills(self, local_skills_dirs: list[tuple[str, str]]) -> None:
         """Upload skill files from local filesystem to sandbox.
@@ -1145,8 +1328,9 @@ class PTCSandbox:
         uploads: list[tuple[bytes, str, tuple[str, dict[str, str]] | None]] = []
 
         # 1. MCP client module
+        enabled_servers = [server for server in self.config.mcp.servers if server.enabled]
         mcp_client_code = self.tool_generator.generate_mcp_client_code(
-            self.config.mcp.servers
+            enabled_servers
         )
         mcp_client_path = f"{work_dir}/tools/mcp_client.py"
         uploads.append((

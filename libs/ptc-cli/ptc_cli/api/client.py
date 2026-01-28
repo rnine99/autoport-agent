@@ -123,7 +123,10 @@ class SSEStreamClient:
         """
         url = urljoin(self.base_url, f"/api/v1/workspaces/{workspace_id}")
         try:
-            response = await self.client.get(url)
+            response = await self.client.get(
+                url,
+                headers={"X-User-Id": self.user_id},
+            )
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
@@ -142,7 +145,11 @@ class SSEStreamClient:
             Updated workspace dict
         """
         url = urljoin(self.base_url, f"/api/v1/workspaces/{workspace_id}/start")
-        response = await self.client.post(url, timeout=30.0)
+        response = await self.client.post(
+            url,
+            headers={"X-User-Id": self.user_id},
+            timeout=30.0,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -157,7 +164,11 @@ class SSEStreamClient:
             Updated workspace dict
         """
         url = urljoin(self.base_url, f"/api/v1/workspaces/{workspace_id}/stop")
-        response = await self.client.post(url, timeout=30.0)
+        response = await self.client.post(
+            url,
+            headers={"X-User-Id": self.user_id},
+            timeout=30.0,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -172,7 +183,11 @@ class SSEStreamClient:
             Deletion confirmation dict
         """
         url = urljoin(self.base_url, f"/api/v1/workspaces/{workspace_id}")
-        response = await self.client.delete(url, timeout=30.0)
+        response = await self.client.delete(
+            url,
+            headers={"X-User-Id": self.user_id},
+            timeout=30.0,
+        )
         response.raise_for_status()
         return response.json()
 

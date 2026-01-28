@@ -290,6 +290,14 @@ class WorkspaceManager:
                 session = self._sessions[workspace_id]
                 logger.info(f"Found cached session for {workspace_id}, initialized={session._initialized}, has_sandbox={session.sandbox is not None}")
                 if session._initialized:
+                    if session.sandbox:
+                        await session.sandbox.ensure_sandbox_ready()
+                        try:
+                            await session.sandbox.sync_tools()
+                        except Exception as e:
+                            logger.warning(
+                                f"Tool sync failed for cached session {workspace_id}: {e}"
+                            )
                     # Sync user data if not already synced
                     await self._sync_user_data_if_needed(
                         workspace_id, workspace_user_id, session.sandbox
@@ -323,7 +331,23 @@ class WorkspaceManager:
                         session.sandbox,
                         reusing_sandbox=sandbox_id is not None,
                     )
+
+                    if session.sandbox:
+                        try:
+                            await session.sandbox.sync_tools()
+                        except Exception as e:
+                            logger.warning(
+                                f"Tool sync failed for session {workspace_id}: {e}"
+                            )
                 else:
+                    if session.sandbox:
+                        await session.sandbox.ensure_sandbox_ready()
+                        try:
+                            await session.sandbox.sync_tools()
+                        except Exception as e:
+                            logger.warning(
+                                f"Tool sync failed for session {workspace_id}: {e}"
+                            )
                     # Session was already initialized - sync user data if not already synced
                     await self._sync_user_data_if_needed(
                         workspace_id, workspace_user_id, session.sandbox
@@ -387,6 +411,14 @@ class WorkspaceManager:
             await self._sync_sandbox_assets(
                 workspace_id, user_id, session.sandbox, reusing_sandbox=True
             )
+
+            if session.sandbox:
+                try:
+                    await session.sandbox.sync_tools()
+                except Exception as e:
+                    logger.warning(
+                        f"Tool sync failed for restarted workspace {workspace_id}: {e}"
+                    )
 
             # Update status to running
             await update_workspace_status(

@@ -339,6 +339,7 @@ async def refresh_workspace(
                 skills_uploaded = await sandbox.sync_skills(
                     skill_dirs,
                     reusing_sandbox=True,
+                    force_refresh=True,
                 )
     except Exception as e:
         logger.warning(f"Skills sync failed during refresh: {e}")

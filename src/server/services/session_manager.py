@@ -173,6 +173,15 @@ class SessionService:
                             exc_info=True
                         )
 
+                if session.sandbox and sandbox_id is not None:
+                    try:
+                        await session.sandbox.sync_tools()
+                    except Exception as e:
+                        logger.warning(
+                            f"Tool sync failed for session {workspace_id}: {e}",
+                            exc_info=True,
+                        )
+
                 # Sync user data to sandbox if user_id provided
                 if user_id and session.sandbox:
                     try:

@@ -1,7 +1,8 @@
 """
 Server script
 """
-
+import asyncio
+import sys
 import argparse
 import logging
 import uvicorn
@@ -9,6 +10,8 @@ import uvicorn
 logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
+    if sys.platform.startswith("win"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Run the server")
     parser.add_argument(
@@ -60,6 +63,17 @@ if __name__ == "__main__":
         reload = True
 
     try:
+        if sys.platform.startswith("win"):
+            import uvicorn.loops.asyncio as _uvicorn_asyncio
+            _orig = _uvicorn_asyncio.asyncio_loop_factory
+
+            def _win_selector_factory(use_subprocess: bool = False):
+                if use_subprocess:
+                    return _orig(use_subprocess=True)
+                return asyncio.SelectorEventLoop
+
+            _uvicorn_asyncio.asyncio_loop_factory = _win_selector_factory
+
         logger.info(f"Starting server on {args.host}:{args.port}")
         uvicorn.run(
             "src.server.app:app",

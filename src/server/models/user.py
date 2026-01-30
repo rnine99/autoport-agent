@@ -413,6 +413,7 @@ class PortfolioHoldingBase(BaseModel):
     exchange: Optional[str] = Field(
         None, max_length=50, description="Exchange (e.g., 'NASDAQ')"
     )
+    name: Optional[str] = Field(None, max_length=255, description="Full instrument name")
     quantity: Decimal = Field(..., description="Number of units held")
     average_cost: Optional[Decimal] = Field(None, description="Average cost per unit")
     currency: str = Field(default="USD", max_length=10, description="Currency")
@@ -445,6 +446,7 @@ class PortfolioHoldingCreate(PortfolioHoldingBase):
 class PortfolioHoldingUpdate(BaseModel):
     """Request model for updating portfolio holding."""
 
+    name: Optional[str] = Field(None, max_length=255, description="Full instrument name")
     quantity: Optional[Decimal] = Field(None, description="Number of units held")
     average_cost: Optional[Decimal] = Field(None, description="Average cost per unit")
     currency: Optional[str] = Field(None, max_length=10, description="Currency")

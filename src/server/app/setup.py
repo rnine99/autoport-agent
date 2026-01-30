@@ -14,7 +14,6 @@ This module contains:
 import asyncio
 import logging
 import os
-import sys
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -28,9 +27,6 @@ from src.config.settings import (
 )
 from src.server.services.background_task_manager import BackgroundTaskManager
 from src.server.services.background_registry_store import BackgroundRegistryStore
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 logger = logging.getLogger(__name__)
 INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
@@ -56,31 +52,32 @@ async def lifespan(app: FastAPI):
 
 
     # Initialize and open conversation database pool
-    import re
-    from src.server.database.conversation import get_db_connection_string, get_or_create_pool
+    from src.server.database.conversation import get_or_create_pool
     conv_pool = get_or_create_pool()
-    conninfo = get_db_connection_string()
-    match = None
-    db_host = db_port = db_name = None
+    # Extract connection details from pool
+    conninfo = conv_pool._conninfo if hasattr(conv_pool, '_conninfo') else "unknown"
     try:
-        match = re.search(r"@([^:]+):(\d+)/([^?]+)", conninfo)
+        # Parse basic connection info (format: postgresql://user:pass@host:port/dbname?sslmode=...)
+        import re
+        match = re.search(r'@([^:]+):(\d+)/([^?]+)', conninfo)
         if match:
             db_host, db_port, db_name = match.groups()
-        await conv_pool.open()
-        async with conv_pool.connection() as conn:
-            await conn.execute("SELECT 1")
-        if match:
+            await conv_pool.open()
+            # Validate pool is ready with a simple health check
+            async with conv_pool.connection() as conn:
+                await conn.execute("SELECT 1")
             logger.info(f"Conversation DB: Connected to {db_host}:{db_port}/{db_name}")
         else:
+            await conv_pool.open()
+            # Validate pool is ready with a simple health check
+            async with conv_pool.connection() as conn:
+                await conn.execute("SELECT 1")
             logger.info("Conversation DB: Connected successfully")
     except Exception as e:
-        if match and db_host and db_port and db_name:
-            logger.error(
-                "Conversation DB: Failed to connect to %s:%s/%s - %s",
-                db_host, db_port, db_name, e,
-            )
+        if match:
+            logger.error(f"Conversation DB: Failed to connect to {db_host}:{db_port}/{db_name} - {e}")
         else:
-            logger.error("Conversation DB: Failed to connect - %s", e)
+            logger.error(f"Conversation DB: Failed to connect - {e}")
         raise
 
     # Initialize Redis cache

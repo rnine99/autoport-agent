@@ -951,7 +951,7 @@
     },
     "moonshot": {
       "sdk": "anthropic",
-      "base_url": "https://api.moonshot.ai/anthropic",
+      "base_url": "https://api.kimi.com/coding",
       "env_key": "MOONSHOT_API_KEY",
       "use_response_api": false
     },
@@ -1016,6 +1016,11 @@
       "base_url": "https://api.cerebras.ai/v1",
       "env_key": "CEREBRAS_API_KEY",
       "use_response_api": false
+    },
+    "anthropic-proxy": {
+      "sdk": "anthropic",
+      "base_url": "http://113.249.103.63:3000",
+      "env_key": "ANTHROPIC_PROXY_API_KEY"
     }
   },
   "infrastructure_pricing": {

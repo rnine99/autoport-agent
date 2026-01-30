@@ -128,7 +128,7 @@
     "provider": "openai",
     "parameters": {
       "reasoning": {
-        "effort": "minimal",
+        "effort": "low",
         "summary": "auto"
       }
     }
@@ -218,27 +218,24 @@
     "model_id": "claude-opus-4-20250522",
     "provider": "anthropic",
     "parameters": {
-      "temperature": 0,
-      "max_tokens": 4096,
-      "top_p": 1,
       "thinking": {
         "type": "disabled"
       },
       "enable_caching": true
     }
   },
-  "claude-sonnet-4-5": {
-    "model_id": "claude-sonnet-4-5-20250929",
-    "provider": "anthropic",
-    "parameters": {
-      "max_tokens": 16000,
-      "thinking": {
-        "type": "enabled",
-        "budget_tokens": 10000
-      },
-      "enable_caching": true
-    }
-  },
+    "claude-sonnet-4-5": {
+      "model_id": "claude-sonnet-4-5-20250929",
+      "provider": "anthropic",
+      "parameters": {
+        "max_tokens": 16000,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 10000
+        },
+        "enable_caching": true
+      }
+    },
   "claude-sonnet-4": {
     "model_id": "claude-sonnet-4-20250522",
     "provider": "anthropic",
@@ -284,15 +281,21 @@
     "model_id": "gemini-3-pro-preview",
     "provider": "gemini",
     "parameters": {
-      "thinking_budget": 0
+      "include_thoughts": true, 
+      "thinking_level": "high"
+    }
+  },
+  "gemini-3-flash": {
+    "model_id": "gemini-3-flash-preview",
+    "provider": "gemini",
+    "parameters": {
+      "include_thoughts": true, 
+      "thinking_level": "medium"
     }
   },
   "gemini-3-pro-image": {
     "model_id": "gemini-3-pro-image-preview",
-    "provider": "gemini",
-    "parameters": {
-      "thinking_budget": 0
-    }
+    "provider": "gemini"
   },
   "gpt-oss-120b": {
     "model_id": "gpt-oss-120b",
@@ -676,6 +679,46 @@
     "provider": "dashscope",
     "parameters": {
       "dimensions": 1536
+    }
+  },
+  "claude-sonnet-4-5-proxy": {
+    "model_id": "claude-sonnet-4-5-20250929",
+    "provider": "anthropic-proxy",
+    "parameters": {
+      "max_tokens": 16000,
+      "thinking": {
+        "type": "enabled"
+      },
+      "enable_caching": true
+    }
+  },
+  "claude-opus-4-5-proxy": {
+    "model_id": "claude-opus-4-5-20251101",
+    "provider": "anthropic-proxy",
+    "parameters": {
+      "thinking": {
+        "type": "enabled"
+      },
+      "enable_caching": true
+    }
+  },
+  "claude-haiku-4-5-proxy": {
+    "model_id": "claude-haiku-4-5-20251001",
+    "provider": "anthropic-proxy",
+    "parameters": {
+      "thinking": {
+        "type": "enabled"
+      },
+      "enable_caching": true
+    }
+  },
+  "kimi": {
+    "model_id": "kimi-for-coding",
+    "provider": "moonshot",
+    "parameters": {
+      "thinking": {
+        "type": "enabled"
+      }
     }
   }
 }

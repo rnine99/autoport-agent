@@ -29,7 +29,7 @@ from src.config.settings import (
 from src.server.services.background_task_manager import BackgroundTaskManager
 from src.server.services.background_registry_store import BackgroundRegistryStore
 
-if sys.platform.startswith("win"):
+if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 logger = logging.getLogger(__name__)

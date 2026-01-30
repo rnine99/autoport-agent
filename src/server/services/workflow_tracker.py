@@ -79,7 +79,7 @@ class WorkflowTracker:
         Returns:
             WorkflowTracker instance
         """
-        if cls._instance is None:
+        if cls._instance is None:   
             cls._instance = cls()
         return cls._instance
 

@@ -380,6 +380,13 @@ class BackgroundTaskManager:
                     raise RuntimeError(
                         f"Workflow {thread_id} already running with status {existing.status}"
                     )
+                # Also block on SOFT_INTERRUPTED - the workflow just stopped and
+                # wait_for_soft_interrupted should be given time to see it
+                if existing.status == TaskStatus.SOFT_INTERRUPTED:
+                    raise RuntimeError(
+                        f"Workflow {thread_id} was just soft-interrupted. "
+                        f"Use wait_for_soft_interrupted() before starting a new workflow."
+                    )
                 # Remove completed task to allow re-run
                 logger.info(
                     f"[BackgroundTaskManager] Removing completed task {thread_id} "
@@ -1601,10 +1608,11 @@ class BackgroundTaskManager:
             if not task_info:
                 return True  # No workflow to wait for
 
-            if task_info.status not in [TaskStatus.QUEUED, TaskStatus.RUNNING]:
-                return True  # Already completed
+            # Include SOFT_INTERRUPTED - the task may still be wrapping up
+            if task_info.status not in [TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.SOFT_INTERRUPTED]:
+                return True  # Already fully completed
 
-            if not task_info.soft_interrupted:
+            if not task_info.soft_interrupted and task_info.status != TaskStatus.SOFT_INTERRUPTED:
                 # Workflow is running but wasn't soft-interrupted
                 # This is an unexpected state - user might be trying to send
                 # concurrent messages. We'll wait briefly but not block too long.
@@ -1623,6 +1631,16 @@ class BackgroundTaskManager:
         try:
             # Wait for the task to complete with timeout
             await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+
+            # Clean up the soft-interrupted task so start_workflow can proceed
+            async with self.task_lock:
+                task_info = self.tasks.get(thread_id)
+                if task_info and task_info.status == TaskStatus.SOFT_INTERRUPTED:
+                    logger.info(
+                        f"[BackgroundTaskManager] Cleaning up soft-interrupted task {thread_id}"
+                    )
+                    del self.tasks[thread_id]
+
             logger.info(
                 f"[BackgroundTaskManager] Soft-interrupted workflow {thread_id} "
                 f"completed, ready for new request"

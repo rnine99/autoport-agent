@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { MoreVertical, Plus, Trash2, X } from 'lucide-react';
+import { MoreVertical, Plus, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog';
 import { Input } from '../../../components/ui/input';
 import { ScrollArea } from '../../../components/ui/scroll-area';
 
@@ -107,36 +108,30 @@ function WatchlistCard({
         </ScrollArea>
       </CardContent>
 
-      {addModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'var(--color-bg-overlay)' }} onClick={onAddModalClose}>
-          <div className="rounded-lg shadow-xl p-6 w-full max-w-sm border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }} onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold" style={{ color: 'var(--color-text-primary)' }}>Add stock</h3>
-              <button type="button" onClick={onAddModalClose} className="p-1 rounded hover:opacity-80" style={{ color: 'var(--color-text-secondary)' }} aria-label="Close">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="flex gap-2">
-              <Input
-                placeholder="Symbol (e.g. AAPL)"
-                value={addSymbol}
-                onChange={(e) => onAddSymbolChange?.(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAddSubmit?.(); } }}
-                className="flex-1 text-white placeholder:text-gray-500 border"
-                style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)' }}
-              />
-              <button
-                type="button"
-                onClick={onAddSubmit}
-                className="px-4 py-2 rounded font-medium shrink-0 hover:opacity-90"
-                style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
-              >
-                Add
-              </button>
-            </div>
+      <Dialog open={addModalOpen} onOpenChange={(open) => !open && onAddModalClose?.()}>
+        <DialogContent className="sm:max-w-sm text-white border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
+          <DialogHeader>
+            <DialogTitle className="dashboard-title-font" style={{ color: 'var(--color-text-primary)' }}>Add stock</DialogTitle>
+          </DialogHeader>
+          <div className="flex gap-2 pt-2" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAddSubmit?.(); } }}>
+            <Input
+              placeholder="Symbol (e.g. AAPL)"
+              value={addSymbol}
+              onChange={(e) => onAddSymbolChange?.(e.target.value)}
+              className="flex-1 text-white placeholder:text-gray-500 border"
+              style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)' }}
+            />
+            <button
+              type="button"
+              onClick={onAddSubmit}
+              className="px-4 py-2 rounded font-medium shrink-0 hover:opacity-90"
+              style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
+            >
+              Add
+            </button>
           </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

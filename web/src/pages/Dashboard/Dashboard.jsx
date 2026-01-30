@@ -16,6 +16,7 @@ import {
   updatePortfolioHolding,
 } from '@/api';
 import { useCallback, useEffect, useState } from 'react';
+import { useToast } from '@/components/ui/use-toast';
 import DashboardHeader from './components/DashboardHeader';
 import ConfirmDialog from './components/ConfirmDialog';
 import IndexMovementCard from './components/IndexMovementCard';
@@ -53,6 +54,8 @@ const RESEARCH_ITEMS = [
 ];
 
 function Dashboard() {
+  const { toast } = useToast();
+  
   const [indices, setIndices] = useState(() =>
     INDEX_SYMBOLS.map((s) => fallbackIndex(normalizeIndexSymbol(s)))
   );
@@ -150,24 +153,34 @@ function Dashboard() {
       fetchWatchlist();
     } catch (e) {
       console.error('Add watchlist item failed:', e?.response?.status, e?.response?.data, e?.message);
+      
+      const status = e?.response?.status;
+      const msg = e?.response?.data?.detail || e?.response?.data?.message || '';
+      
+      if (status === 409 || msg.toLowerCase().includes('already exists')) {
+        toast({
+          variant: 'destructive',
+          title: 'Already in watchlist',
+          description: `${sym} is already in your watchlist.`,
+        });
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Cannot add stock',
+          description: msg || 'Failed to add to watchlist. Please try again.',
+        });
+      }
     }
-  }, [addSymbol, fetchWatchlist]);
+  }, [addSymbol, fetchWatchlist, toast]);
 
   const handleDeleteWatchlistItem = useCallback(
-    (itemId) => {
-      setDeleteConfirm({
-        open: true,
-        title: 'Remove from watchlist',
-        message: 'Remove this item?',
-        onConfirm: async () => {
-          try {
-            await deleteWatchlistItem('default', itemId, DEFAULT_USER_ID);
-            fetchWatchlist();
-          } catch (e) {
-            console.error('Delete watchlist item failed:', e?.response?.status, e?.response?.data, e?.message);
-          }
-        },
-      });
+    async (itemId) => {
+      try {
+        await deleteWatchlistItem(itemId, DEFAULT_USER_ID);
+        fetchWatchlist();
+      } catch (e) {
+        console.error('Delete watchlist item failed:', e?.response?.status, e?.response?.data, e?.message);
+      }
     },
     [fetchWatchlist]
   );
@@ -300,6 +313,22 @@ function Dashboard() {
       fetchPortfolio();
     } catch (e) {
       console.error('Add portfolio holding failed:', e?.response?.status, e?.response?.data, e?.message);
+      
+      const msg = e?.response?.data?.detail || e?.response?.data?.message || '';
+      
+      if (msg.includes('数字字段溢出') || msg.includes('NumericValueOutOfRange')) {
+        toast({
+          variant: 'destructive',
+          title: 'Holding amount too large',
+          description: 'The total position value exceeds system limits. Try reducing quantity or price.',
+        });
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Cannot add holding',
+          description: 'Failed to add holding. Please try again.',
+        });
+      }
     }
   }, [portfolioForm, fetchPortfolio]);
 
@@ -334,6 +363,22 @@ function Dashboard() {
       fetchPortfolio();
     } catch (e) {
       console.error('Update portfolio holding failed:', e?.response?.status, e?.response?.data, e?.message);
+      
+      const msg = e?.response?.data?.detail || e?.response?.data?.message || '';
+      
+      if (msg.includes('数字字段溢出') || msg.includes('NumericValueOutOfRange')) {
+        toast({
+          variant: 'destructive',
+          title: 'Holding amount too large',
+          description: 'The total position value exceeds system limits. Try reducing quantity or price.',
+        });
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Update failed',
+          description: 'Something went wrong while saving your portfolio.',
+        });
+      }
     }
   }, [portfolioEditRow, portfolioEditForm, fetchPortfolio]);
 

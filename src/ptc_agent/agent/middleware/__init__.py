@@ -4,10 +4,9 @@ This module provides middleware for LangChain/LangGraph agents:
 
 - background/: Background subagent orchestration
 - plan_mode: Human-in-the-loop plan review
-- view_image_middleware: Image viewing capabilities
 - tool/: Tool argument parsing, error handling, result normalization
 - caching/: Tool result caching with SSE events
-- file_operations/: File operation SSE event emission
+- file_operations/: File operation SSE event emission and vision middleware
 - summarization/: SSE-enabled summarization
 """
 
@@ -24,12 +23,6 @@ from ptc_agent.agent.middleware.plan_mode import (
     create_plan_mode_interrupt_config,
 )
 
-# View image middleware
-from ptc_agent.agent.middleware.view_image_middleware import (
-    ViewImageMiddleware,
-    create_view_image_tool,
-)
-
 # Tool middleware (argument parsing, error handling, result normalization)
 from ptc_agent.agent.middleware.tool import (
     ToolArgumentParsingMiddleware,
@@ -44,10 +37,11 @@ from ptc_agent.agent.middleware.caching import (
     ToolResultCacheState,
 )
 
-# File operations middleware
+# File operations middleware (includes MultimodalMiddleware for images/PDFs)
 from ptc_agent.agent.middleware.file_operations import (
     FileOperationMiddleware,
     FileOperationState,
+    MultimodalMiddleware,
 )
 
 # Todo operations middleware
@@ -76,9 +70,8 @@ __all__ = [
     # Plan mode
     "PlanModeMiddleware",
     "create_plan_mode_interrupt_config",
-    # View image
-    "ViewImageMiddleware",
-    "create_view_image_tool",
+    # Multimodal middleware (for read_file image/PDF support)
+    "MultimodalMiddleware",
     # Tool middleware
     "ToolArgumentParsingMiddleware",
     "ToolErrorHandlingMiddleware",

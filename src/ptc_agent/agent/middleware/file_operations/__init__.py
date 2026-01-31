@@ -1,15 +1,18 @@
-"""File operation middlewares for SSE event emission.
+"""File operation middlewares.
 
-This module provides middleware for intercepting file operations (write_file, edit_file)
-and emitting artifact SSE events for frontend display.
+This module provides middleware for intercepting file operations:
+- FileOperationMiddleware: SSE event emission for write_file/edit_file
+- MultimodalMiddleware: Image/PDF injection for read_file with visual file paths/URLs
 """
 
 from ptc_agent.agent.middleware.file_operations.sse_middleware import (
     FileOperationMiddleware,
     FileOperationState,
 )
+from ptc_agent.agent.middleware.file_operations.multimodal import MultimodalMiddleware
 
 __all__ = [
     "FileOperationMiddleware",
     "FileOperationState",
+    "MultimodalMiddleware",
 ]

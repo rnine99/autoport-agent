@@ -64,7 +64,9 @@ async def _check_url_downloadable(url: str, timeout: int, retry: bool = True) ->
     - Slow-downloading images that would timeout on OpenAI
     - Corrupted images that can't be decoded
     - Unsupported image formats
-    - Images with incorrect Content-Type headers
+
+    Note: Content-Type headers are NOT trusted - many CDNs/S3 buckets return incorrect
+    headers (e.g., binary/octet-stream). We use PIL's format detection as authoritative.
 
     Args:
         url: URL to check
@@ -74,6 +76,14 @@ async def _check_url_downloadable(url: str, timeout: int, retry: bool = True) ->
     Returns:
         True if accessible, downloadable, decodable and has supported format, False otherwise
     """
+    # Map PIL format names to MIME types for validation
+    PIL_FORMAT_TO_MIME = {
+        'JPEG': 'image/jpeg',
+        'PNG': 'image/png',
+        'GIF': 'image/gif',
+        'WEBP': 'image/webp',
+    }
+
     async def _attempt_validation() -> bool:
         """Single validation attempt."""
         try:
@@ -93,15 +103,6 @@ async def _check_url_downloadable(url: str, timeout: int, retry: bool = True) ->
                         f"Some multimodal APIs (e.g., Qwen) may reject this image."
                     )
 
-                # Strict Content-Type validation: Only OpenAI-supported formats
-                content_type = response.headers.get('Content-Type', '').lower().split(';')[0].strip()
-                if content_type not in OPENAI_SUPPORTED_FORMATS:
-                    logger.debug(
-                        f"Unsupported Content-Type '{content_type}' for {url}. "
-                        f"OpenAI only supports: {sorted(OPENAI_SUPPORTED_FORMATS)}"
-                    )
-                    return False
-
                 # Get the image data
                 image_data = response.content
 
@@ -109,14 +110,27 @@ async def _check_url_downloadable(url: str, timeout: int, retry: bool = True) ->
                     logger.debug(f"Empty image data received from {url}")
                     return False
 
-                # Verify the image is decodable with PIL
+                # Verify the image is decodable with PIL and check actual format
+                # (don't trust Content-Type headers - S3/CDNs often return wrong types)
                 try:
                     img = Image.open(io.BytesIO(image_data))
                     # Verify the image by attempting to load it
                     img.verify()
+
+                    # Check if PIL-detected format is supported by OpenAI
+                    pil_format = img.format
+                    mime_type = PIL_FORMAT_TO_MIME.get(pil_format)
+
+                    if mime_type not in OPENAI_SUPPORTED_FORMATS:
+                        logger.debug(
+                            f"Unsupported image format '{pil_format}' for {url}. "
+                            f"OpenAI only supports: JPEG, PNG, GIF, WEBP"
+                        )
+                        return False
+
                     logger.debug(
                         f"Image validation success: {url} "
-                        f"(format={img.format}, size={img.size}, {len(image_data)} bytes)"
+                        f"(format={pil_format}, size={img.size}, {len(image_data)} bytes)"
                     )
                     return True
                 except Exception as e:

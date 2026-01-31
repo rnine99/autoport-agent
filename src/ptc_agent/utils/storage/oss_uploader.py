@@ -38,6 +38,7 @@ Configuration:
 
 import base64
 import logging
+import mimetypes
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +48,41 @@ import alibabacloud_oss_v2.exceptions as oss_exceptions
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# MIME type mapping for common image formats
+# Used as fallback when mimetypes module doesn't recognize extension
+IMAGE_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".bmp": "image/bmp",
+    ".tiff": "image/tiff",
+    ".tif": "image/tiff",
+}
+
+
+def _get_content_type(key: str) -> str | None:
+    """Get the MIME content type for a file based on its extension.
+
+    Args:
+        key: File path or OSS key with extension
+
+    Returns:
+        MIME type string, or None if unknown
+    """
+    ext = Path(key).suffix.lower()
+
+    # Try our image-specific mapping first
+    if ext in IMAGE_MIME_TYPES:
+        return IMAGE_MIME_TYPES[ext]
+
+    # Fall back to mimetypes module
+    mime_type, _ = mimetypes.guess_type(key)
+    return mime_type
 
 
 class OSSConfig:
@@ -91,12 +127,13 @@ def get_oss_client() -> oss.Client:
     return oss.Client(cfg)
 
 
-def upload_file(key: str, file_path: str) -> bool:
+def upload_file(key: str, file_path: str, content_type: str | None = None) -> bool:
     """Upload a local file to OSS.
 
     Args:
         key: The object key (path) in OSS bucket (e.g., "images/photo.png")
         file_path: Path to the local file to upload
+        content_type: Optional MIME type. If not provided, auto-detected from extension.
 
     Returns:
         bool: True if upload successful, False otherwise
@@ -118,6 +155,10 @@ def upload_file(key: str, file_path: str) -> bool:
         )
         return False
 
+    # Auto-detect content type from key (OSS path) or file path
+    if content_type is None:
+        content_type = _get_content_type(key) or _get_content_type(file_path)
+
     try:
         client = get_oss_client()
 
@@ -126,9 +167,10 @@ def upload_file(key: str, file_path: str) -> bool:
                 bucket=OSSConfig.BUCKET_NAME,
                 key=key,
                 body=f,
+                content_type=content_type,
             ))
 
-        logger.debug(f"Uploaded {path_obj} to OSS as {key}, status: {result.status_code}")
+        logger.debug(f"Uploaded {path_obj} to OSS as {key} (ContentType: {content_type}), status: {result.status_code}")
         return True
 
     except oss_exceptions.OssError:
@@ -139,12 +181,14 @@ def upload_file(key: str, file_path: str) -> bool:
         return False
 
 
-def upload_base64(key: str, image_data: str) -> bool:
+def upload_base64(key: str, image_data: str, content_type: str | None = None) -> bool:
     """Upload base64-encoded image data to OSS.
 
     Args:
         key: The object key (path) in OSS bucket
         image_data: Base64-encoded image string (with or without data URI prefix)
+        content_type: Optional MIME type. If not provided, extracted from data URI
+                      prefix or auto-detected from key extension.
 
     Returns:
         bool: True if upload successful, False otherwise
@@ -157,26 +201,32 @@ def upload_base64(key: str, image_data: str) -> bool:
         True
     """
     try:
-        # Remove data URI prefix if present (e.g., "data:image/png;base64,")
+        # Extract content type from data URI prefix if present (e.g., "data:image/png;base64,")
         if "," in image_data:
-            image_data = image_data.split(",", 1)[1]
+            prefix, image_data = image_data.split(",", 1)
+            if content_type is None and prefix.startswith("data:"):
+                # Parse "data:image/png;base64" to get "image/png"
+                mime_part = prefix[5:]  # Remove "data:"
+                if ";" in mime_part:
+                    content_type = mime_part.split(";")[0]
 
         # Decode base64 to bytes
         image_bytes = base64.b64decode(image_data)
 
-        return upload_bytes(key, image_bytes)
+        return upload_bytes(key, image_bytes, content_type=content_type)
 
     except Exception as e:
         logger.error(f"Failed to decode base64 data for {key}: {e}")
         return False
 
 
-def upload_bytes(key: str, data: bytes) -> bool:
+def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> bool:
     """Upload raw bytes to OSS.
 
     Args:
         key: The object key (path) in OSS bucket
         data: Raw bytes to upload
+        content_type: Optional MIME type. If not provided, auto-detected from key extension.
 
     Returns:
         bool: True if upload successful, False otherwise
@@ -192,6 +242,10 @@ def upload_bytes(key: str, data: bytes) -> bool:
         )
         return False
 
+    # Auto-detect content type from key extension if not provided
+    if content_type is None:
+        content_type = _get_content_type(key)
+
     try:
         client = get_oss_client()
 
@@ -199,9 +253,10 @@ def upload_bytes(key: str, data: bytes) -> bool:
             bucket=OSSConfig.BUCKET_NAME,
             key=key,
             body=data,
+            content_type=content_type,
         ))
 
-        logger.debug(f"Uploaded bytes to OSS as {key}, status: {result.status_code}")
+        logger.debug(f"Uploaded bytes to OSS as {key} (ContentType: {content_type}), status: {result.status_code}")
         return True
 
     except oss_exceptions.OssError:

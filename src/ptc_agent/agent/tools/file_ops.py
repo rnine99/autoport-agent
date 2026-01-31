@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Callable
 
 import structlog
 from langchain_core.tools import tool
 
 logger = structlog.get_logger(__name__)
+
+# Supported image extensions for vision/document middleware
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+# Supported document extensions for document middleware
+DOCUMENT_EXTENSIONS = frozenset({".pdf"})
+
+# Combined visual extensions (images + documents that need special handling)
+VISUAL_EXTENSIONS = IMAGE_EXTENSIONS | DOCUMENT_EXTENSIONS
 
 # Type alias for operation callback
 OperationCallback = Callable[[dict[str, Any]], None]
@@ -58,17 +68,39 @@ def create_filesystem_tools(
 
     @tool
     async def read_file(file_path: str, offset: int | None = None, limit: int | None = None) -> str:
-        """Read a file with line numbers (cat -n format).
+        """Read a file with line numbers (cat -n format). Also supports images (PNG, JPG, GIF, WebP), PDFs, and URLs.
 
         Args:
-            file_path: Path to file (relative or absolute).
-            offset: Line offset (0-indexed). Default: 0.
-            limit: Maximum number of lines. Default: 2000.
+            file_path: Path to file (relative or absolute), or image/PDF URL.
+            offset: Line offset (0-indexed). Default: 0. Ignored for images/PDFs.
+            limit: Maximum number of lines. Default: 2000. Ignored for images/PDFs.
 
         Returns:
-            File contents with line numbers, or ERROR.
+            File contents with line numbers, document loading confirmation, or ERROR.
         """
         try:
+            # Handle URLs - middleware will inject the content
+            if file_path.startswith(("http://", "https://")):
+                logger.info("Loading document from URL", url=file_path)
+                return f"Loading document from URL: {file_path}"
+
+            # Check if this is a visual file (image or document) by extension
+            suffix = Path(file_path).suffix.lower()
+            if suffix in VISUAL_EXTENSIONS:
+                # Validate the path exists before returning acknowledgment
+                normalized_path = sandbox.normalize_path(file_path)
+                logger.info("Loading image file", file_path=file_path, normalized_path=normalized_path)
+
+                if sandbox.config.filesystem.enable_path_validation and not sandbox.validate_path(normalized_path):
+                    error_msg = f"Access denied: {file_path} is not in allowed directories"
+                    logger.error(error_msg, file_path=file_path)
+                    return f"ERROR: {error_msg}"
+
+                # Return acknowledgment - middleware will handle content injection
+                file_type = "image" if suffix in IMAGE_EXTENSIONS else "document"
+                return f"Loading {file_type}: {file_path}"
+
+            # Standard text file handling
             normalized_path = sandbox.normalize_path(file_path)
             logger.info("Reading file", file_path=file_path, normalized_path=normalized_path, offset=offset, limit=limit)
 

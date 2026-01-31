@@ -22,9 +22,8 @@ from ptc_agent.agent.middleware import (
     BackgroundSubagentOrchestrator,
     PlanModeMiddleware,
     ToolCallCounterMiddleware,
-    ViewImageMiddleware,
+    MultimodalMiddleware,
     create_plan_mode_interrupt_config,
-    create_view_image_tool,
     # Tool middleware
     ToolArgumentParsingMiddleware,
     ToolErrorHandlingMiddleware,
@@ -294,13 +293,6 @@ class PTCAgent:
         tools.append(web_search_tool)
         logger.info("Web search tool enabled", tool="web_search")
 
-        # Add view_image tool if enabled (with sandbox for reading local images)
-        view_image_tool = None
-        if self.config.enable_view_image:
-            view_image_tool = create_view_image_tool(sandbox=sandbox)
-            tools.append(view_image_tool)
-            logger.info("Vision tool enabled", tool="view_image")
-
         # Default to subagents from config if none specified
         if subagent_names is None:
             subagent_names = self.config.subagents_enabled
@@ -325,15 +317,11 @@ class PTCAgent:
         shared_middleware.append(TodoWriteMiddleware())
         logger.info("TodoWriteMiddleware enabled for SSE events")
 
-        # Add view image middleware (always added when tool is enabled, for image injection)
+        # Add multimodal middleware for read_file image/PDF support (when enabled)
         if self.config.enable_view_image:
-            view_image_middleware = ViewImageMiddleware(
-                validate_urls=True,
-                strict_validation=True,
-                sandbox=sandbox,
-            )
-            shared_middleware.append(view_image_middleware)
-            logger.info("ViewImageMiddleware enabled with strict validation and sandbox support")
+            multimodal_middleware = MultimodalMiddleware(sandbox=sandbox)
+            shared_middleware.append(multimodal_middleware)
+            logger.info("MultimodalMiddleware enabled for read_file image/PDF support")
 
         # Add dynamic skill loader middleware for user onboarding etc.
         skill_loader_middleware = DynamicSkillLoaderMiddleware(
@@ -390,8 +378,7 @@ class PTCAgent:
                 )
 
         # Create subagents from names using the registry
-        # Pass vision tools to subagents if enabled
-        vision_tools = [view_image_tool] if view_image_tool else None
+        # Note: Subagents get vision capability through VisionMiddleware in shared_middleware
         subagents = create_subagents_from_names(
             names=subagent_names,
             sandbox=sandbox,
@@ -400,7 +387,6 @@ class PTCAgent:
             max_researcher_iterations=DEFAULT_MAX_TASK_ITERATIONS,
             max_iterations=DEFAULT_MAX_GENERAL_ITERATIONS,
             filesystem_tools=filesystem_tools,  # Pass custom tools to subagents
-            vision_tools=vision_tools,  # Pass vision tools to subagents
         )
 
         if additional_subagents:

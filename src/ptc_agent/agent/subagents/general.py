@@ -20,7 +20,6 @@ def get_general_subagent_config(
     include_mcp_docs: bool = True,
     tool_exposure_mode: str = "full",
     filesystem_tools: list[Any] | None = None,
-    vision_tools: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Get configuration for the general-purpose sub-agent.
 
@@ -32,8 +31,9 @@ def get_general_subagent_config(
         include_mcp_docs: Whether to include MCP tool documentation in prompt
         tool_exposure_mode: How to format tool docs ("full" or "summary")
         filesystem_tools: Custom filesystem tools (read, write, edit, glob, grep)
-            to use instead of relying on FilesystemMiddleware
-        vision_tools: Optional vision tools (e.g., view_image) for multimodal capabilities
+            to use instead of relying on FilesystemMiddleware.
+            Vision support is provided via VisionMiddleware intercepting read_file
+            for image paths/URLs.
 
     Returns:
         Sub-agent configuration dictionary for deepagent
@@ -79,12 +79,9 @@ result = tool_name(param="value")
 
     # Add custom filesystem tools if provided
     # This overrides deepagent's FilesystemMiddleware for these operations
+    # Note: Vision is handled by VisionMiddleware intercepting read_file for images
     if filesystem_tools:
         tools.extend(filesystem_tools)
-
-    # Add vision tools if provided (e.g., view_image for multimodal capabilities)
-    if vision_tools:
-        tools.extend(vision_tools)
 
     # Add any additional tools
     if additional_tools:
@@ -112,7 +109,6 @@ def create_general_subagent(
     include_mcp_docs: bool = True,
     tool_exposure_mode: str = "full",
     filesystem_tools: list[Any] | None = None,
-    vision_tools: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Create a general-purpose sub-agent for deepagent.
 
@@ -125,8 +121,8 @@ def create_general_subagent(
         additional_tools: Additional tools to include
         include_mcp_docs: Whether to include MCP tool documentation in prompt
         tool_exposure_mode: How to format tool docs ("full" or "summary")
-        filesystem_tools: Custom filesystem tools (read, write, edit, glob, grep)
-        vision_tools: Optional vision tools (e.g., view_image) for multimodal capabilities
+        filesystem_tools: Custom filesystem tools (read, write, edit, glob, grep).
+            Vision support is provided via VisionMiddleware in shared middleware.
 
     Returns:
         Sub-agent configuration dictionary
@@ -139,5 +135,4 @@ def create_general_subagent(
         include_mcp_docs=include_mcp_docs,
         tool_exposure_mode=tool_exposure_mode,
         filesystem_tools=filesystem_tools,
-        vision_tools=vision_tools,
     )

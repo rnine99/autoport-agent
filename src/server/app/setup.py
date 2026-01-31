@@ -9,9 +9,20 @@ This module contains:
 """
 
 # ============================================================================
+# Windows Event Loop Fix (must be before any async imports)
+# ============================================================================
+# On Windows, Python 3.8+ defaults to ProactorEventLoop, which is incompatible
+# with psycopg's async mode. Set WindowsSelectorEventLoopPolicy before any
+# async code runs to avoid "ProactorEventLoop" errors when opening connection pools.
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# ============================================================================
 # Imports and Global Variables
 # ============================================================================
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager

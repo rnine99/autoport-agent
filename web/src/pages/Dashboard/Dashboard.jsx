@@ -27,6 +27,7 @@ import TopResearchCard from './components/TopResearchCard';
 import ChatInputCard from './components/ChatInputCard';
 import WatchlistCard from './components/WatchlistCard';
 import AddWatchlistItemDialog from './components/AddWatchlistItemDialog';
+import AddPortfolioHoldingDialog from './components/AddPortfolioHoldingDialog';
 import PortfolioCard from './components/PortfolioCard';
 import './Dashboard.css';
 
@@ -269,32 +270,41 @@ function Dashboard() {
   const [portfolioLoading, setPortfolioLoading] = useState(true);
   const [portfolioHasRealHoldings, setPortfolioHasRealHoldings] = useState(false);
   const [portfolioModalOpen, setPortfolioModalOpen] = useState(false);
-  const [portfolioForm, setPortfolioForm] = useState({
-    symbol: '',
-    quantity: '',
-    averageCost: '',
-    accountName: '',
-    notes: '',
-  });
 
+  /**
+   * Fetches portfolio holdings data by:
+   * 1. Getting all holdings for the user from /api/v1/users/me/portfolio
+   * 2. Getting current stock prices for those symbols
+   * 3. Calculating Unrealized P/L % using average_cost and current price
+   * 4. Combining the data for display
+   */
   const fetchPortfolio = useCallback(async () => {
     setPortfolioLoading(true);
     try {
+      // Step 1: Get all portfolio holdings for the user
       const { holdings } = await getPortfolio(DEFAULT_USER_ID);
+      
+      // Step 2: Extract symbols from holdings (empty array if no holdings)
       const symbols = holdings?.length
         ? holdings.map((h) => String(h.symbol || '').trim().toUpperCase())
-        : DEFAULT_WATCHLIST_SYMBOLS;
-      const prices = await getStockPrices(symbols);
+        : [];
+      
+      // Step 3: Get current stock prices for the symbols (only if there are symbols)
+      const prices = symbols.length > 0 ? await getStockPrices(symbols) : [];
       const bySym = Object.fromEntries((prices || []).map((p) => [p.symbol, p]));
+      
+      // Step 4: Combine holdings with price data
+      // If no holdings exist, set empty array
       if (holdings?.length) {
         setPortfolioHasRealHoldings(true);
         const rows = holdings.map((h) => {
           const sym = String(h.symbol || '').trim().toUpperCase();
           const p = bySym[sym] || {};
-          const q = Number(h.quantity);
+          const q = Number(h.quantity || 0);
           const ac = h.average_cost != null ? Number(h.average_cost) : null;
           const price = p.price ?? 0;
           const marketValue = q * price;
+          // Calculate Unrealized P/L %: ((current_price - average_cost) / average_cost) * 100
           const plPct = ac != null && ac > 0 ? ((price - ac) / ac) * 100 : null;
           return {
             holding_id: h.holding_id,
@@ -302,53 +312,40 @@ function Dashboard() {
             quantity: q,
             average_cost: ac,
             notes: h.notes ?? '',
-            price,
+            price, // Current price from stock prices API
             marketValue,
-            unrealizedPlPercent: plPct,
+            unrealizedPlPercent: plPct, // Unrealized P/L %
             isPositive: plPct == null ? true : plPct >= 0,
           };
         });
         setPortfolioRows(rows);
       } else {
         setPortfolioHasRealHoldings(false);
-        const rows = DEFAULT_WATCHLIST_SYMBOLS.map((s) => {
-          const p = bySym[s] || {};
-          return {
-            symbol: s,
-            name: DEFAULT_WATCHLIST_NAMES[s] || s,
-            price: p.price ?? 0,
-            quantity: null,
-            marketValue: null,
-            unrealizedPlPercent: null,
-            isPositive: p.isPositive ?? true,
-          };
-        });
-        setPortfolioRows(rows);
+        setPortfolioRows([]);
       }
-    } catch {
+    } catch (error) {
+      console.error('[Dashboard] Error fetching portfolio:', error);
       setPortfolioHasRealHoldings(false);
-      const prices = await getStockPrices(DEFAULT_WATCHLIST_SYMBOLS);
-      const bySym = Object.fromEntries((prices || []).map((p) => [p.symbol, p]));
-      setPortfolioRows(
-        DEFAULT_WATCHLIST_SYMBOLS.map((s) => {
-          const p = bySym[s] || {};
-          return {
-            symbol: s,
-            price: p.price ?? 0,
-            quantity: null,
-            marketValue: null,
-            unrealizedPlPercent: null,
-            isPositive: p.isPositive ?? true,
-          };
-        })
-      );
+      setPortfolioRows([]);
     } finally {
       setPortfolioLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // Fetch immediately on mount
     fetchPortfolio();
+    
+    // Set up interval to fetch every minute (60000ms)
+    const intervalId = setInterval(() => {
+      console.log('[Dashboard] Auto-refreshing Portfolio data (1 minute interval)');
+      fetchPortfolio();
+    }, 60000); // 60 seconds = 1 minute
+    
+    // Cleanup interval on unmount
+    return () => {
+      clearInterval(intervalId);
+    };
   }, [fetchPortfolio]);
 
   const handleDeletePortfolioItem = useCallback(
@@ -370,27 +367,21 @@ function Dashboard() {
     [fetchPortfolio]
   );
 
-  const handleAddPortfolio = useCallback(async () => {
-    const sym = String(portfolioForm.symbol || '').trim().toUpperCase();
-    const q = Number(portfolioForm.quantity);
-    const ac = Number(portfolioForm.averageCost);
-    if (!sym || !Number.isFinite(q) || q <= 0 || !Number.isFinite(ac) || ac <= 0) return;
-    const payload = {
-      symbol: sym,
-      instrument_type: 'stock',
-      quantity: q,
-      average_cost: ac,
-      currency: 'USD',
-      exchange: 'NASDAQ',
-      account_name: portfolioForm.accountName?.trim() || undefined,
-      notes: portfolioForm.notes?.trim() || undefined,
-      first_purchased_at: new Date().toISOString(),
-    };
+  /**
+   * Adds a portfolio holding with full details
+   * @param {Object} payload - Portfolio holding data from AddPortfolioHoldingDialog
+   * @param {string} userId - The user ID
+   */
+  const handleAddPortfolio = useCallback(async (payload, userId) => {
     try {
-      await addPortfolioHolding(payload, DEFAULT_USER_ID);
-      setPortfolioForm({ symbol: '', quantity: '', averageCost: '', accountName: '', notes: '' });
+      await addPortfolioHolding(payload, userId || DEFAULT_USER_ID);
       setPortfolioModalOpen(false);
       fetchPortfolio();
+      
+      toast({
+        title: 'Holding added',
+        description: `${payload.symbol} has been added to your portfolio.`,
+      });
     } catch (e) {
       console.error('Add portfolio holding failed:', e?.response?.status, e?.response?.data, e?.message);
       
@@ -406,11 +397,11 @@ function Dashboard() {
         toast({
           variant: 'destructive',
           title: 'Cannot add holding',
-          description: 'Failed to add holding. Please try again.',
+          description: msg || 'Failed to add holding. Please try again.',
         });
       }
     }
-  }, [portfolioForm, fetchPortfolio]);
+  }, [fetchPortfolio, toast]);
 
   const [portfolioEditRow, setPortfolioEditRow] = useState(null);
   const [portfolioEditForm, setPortfolioEditForm] = useState({ quantity: '', averageCost: '', notes: '' });
@@ -512,12 +503,7 @@ function Dashboard() {
                   rows={portfolioRows}
                   loading={portfolioLoading}
                   hasRealHoldings={portfolioHasRealHoldings}
-                  addModalOpen={portfolioModalOpen}
-                  onAddModalClose={() => setPortfolioModalOpen(false)}
                   onHeaderAddClick={() => setPortfolioModalOpen(true)}
-                  addForm={portfolioForm}
-                  onAddFormChange={setPortfolioForm}
-                  onAddSubmit={handleAddPortfolio}
                   editRow={portfolioEditRow}
                   editForm={portfolioEditForm}
                   onEditFormChange={setPortfolioEditForm}
@@ -525,6 +511,12 @@ function Dashboard() {
                   onEditClose={() => setPortfolioEditRow(null)}
                   onDeleteItem={handleDeletePortfolioItem}
                   onEditItem={openPortfolioEdit}
+                />
+                <AddPortfolioHoldingDialog
+                  open={portfolioModalOpen}
+                  onClose={() => setPortfolioModalOpen(false)}
+                  onAdd={handleAddPortfolio}
+                  userId={DEFAULT_USER_ID}
                 />
                     </div>
             </div>

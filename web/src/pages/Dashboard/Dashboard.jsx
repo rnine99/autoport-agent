@@ -11,10 +11,11 @@ import {
   getIndices,
   getPortfolio,
   getStockPrices,
-  getWatchlistItems,
+  listWatchlists,
+  listWatchlistItems,
   normalizeIndexSymbol,
   updatePortfolioHolding,
-} from '@/api';
+} from './utils/api';
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '@/components/ui/use-toast';
 import DashboardHeader from './components/DashboardHeader';
@@ -25,33 +26,34 @@ import TopNewsCard from './components/TopNewsCard';
 import TopResearchCard from './components/TopResearchCard';
 import ChatInputCard from './components/ChatInputCard';
 import WatchlistCard from './components/WatchlistCard';
+import AddWatchlistItemDialog from './components/AddWatchlistItemDialog';
 import PortfolioCard from './components/PortfolioCard';
 import './Dashboard.css';
 
 const POPULAR_ITEMS = [
-  { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: true },
-  { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
-  { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
-  { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
-];
+    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: true },
+    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
+    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
+    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
+  ];
 
 const NEWS_ITEMS = [
-  { title: 'Federal Reserve Signals Potential Rate Cuts Amid Economic Uncertainty', time: '5 min ago', isHot: true },
-  { title: 'Tech Stocks Rally as AI Companies Report Record Quarterly Earnings', time: '12 min ago', isHot: false },
-  { title: 'Oil Prices Surge Following OPEC Production Cut Announcement', time: '18 min ago', isHot: true },
-  { title: 'Cryptocurrency Market Volatility Increases as Regulatory News Emerges', time: '25 min ago', isHot: false },
-  { title: 'Global Supply Chain Disruptions Impact Manufacturing Sector Performance', time: '1 hr ago', isHot: true },
-  { title: 'Housing Market Shows Signs of Cooling as Mortgage Rates Climb', time: '2 hrs ago', isHot: false },
-  { title: 'European Central Bank Maintains Current Interest Rate Policy', time: '3 hrs ago', isHot: false },
-  { title: 'Renewable Energy Investments Reach All-Time High in Q4', time: '5 hrs ago', isHot: true },
-];
+    { title: 'Federal Reserve Signals Potential Rate Cuts Amid Economic Uncertainty', time: '5 min ago', isHot: true },
+    { title: 'Tech Stocks Rally as AI Companies Report Record Quarterly Earnings', time: '12 min ago', isHot: false },
+    { title: 'Oil Prices Surge Following OPEC Production Cut Announcement', time: '18 min ago', isHot: true },
+    { title: 'Cryptocurrency Market Volatility Increases as Regulatory News Emerges', time: '25 min ago', isHot: false },
+    { title: 'Global Supply Chain Disruptions Impact Manufacturing Sector Performance', time: '1 hr ago', isHot: true },
+    { title: 'Housing Market Shows Signs of Cooling as Mortgage Rates Climb', time: '2 hrs ago', isHot: false },
+    { title: 'European Central Bank Maintains Current Interest Rate Policy', time: '3 hrs ago', isHot: false },
+    { title: 'Renewable Energy Investments Reach All-Time High in Q4', time: '5 hrs ago', isHot: true },
+  ];
 
 const RESEARCH_ITEMS = [
-  { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-  { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-  { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-  { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-];
+    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
+    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
+    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
+    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
+  ];
 
 function Dashboard() {
   const { toast } = useToast();
@@ -64,9 +66,29 @@ function Dashboard() {
   const fetchIndices = useCallback(async () => {
     setIndicesLoading(true);
     try {
+      console.log('[Dashboard] Fetching indices - Request params:', {
+        symbols: INDEX_SYMBOLS,
+        timestamp: new Date().toISOString(),
+      });
+      
+      // API doesn't require from/to params - just call with symbols
       const { indices: next } = await getIndices(INDEX_SYMBOLS);
+      
+      console.log('[Dashboard] Received indices response:', {
+        indices: next,
+        count: next?.length,
+        sample: next?.[0],
+        timestamp: new Date().toISOString(),
+      });
+      
       setIndices(next);
-    } catch {
+    } catch (error) {
+      console.error('[Dashboard] Error fetching indices:', {
+        error,
+        message: error?.message,
+        stack: error?.stack,
+        timestamp: new Date().toISOString(),
+      });
       setIndices(INDEX_SYMBOLS.map((s) => fallbackIndex(normalizeIndexSymbol(s))));
     } finally {
       setIndicesLoading(false);
@@ -74,20 +96,58 @@ function Dashboard() {
   }, []);
 
   useEffect(() => {
+    // Fetch immediately on mount
     fetchIndices();
+    
+    // Set up interval to fetch every minute (60000ms)
+    const intervalId = setInterval(() => {
+      console.log('[Dashboard] Auto-refreshing Index Movement data (1 minute interval)');
+      fetchIndices();
+    }, 60000); // 60 seconds = 1 minute
+    
+    // Cleanup interval on unmount
+    return () => {
+      clearInterval(intervalId);
+    };
   }, [fetchIndices]);
 
   const [watchlistRows, setWatchlistRows] = useState([]);
   const [watchlistLoading, setWatchlistLoading] = useState(true);
   const [watchlistModalOpen, setWatchlistModalOpen] = useState(false);
-  const [addSymbol, setAddSymbol] = useState('');
+  const [currentWatchlistId, setCurrentWatchlistId] = useState(null);
+  
+  /**
+   * Fetches watchlist data by:
+   * 1. Getting all watchlists for the user
+   * 2. Using the first watchlist's ID to fetch its items
+   * 3. Getting stock prices for those symbols
+   * 4. Combining the data for display
+   */
   const fetchWatchlist = useCallback(async () => {
     setWatchlistLoading(true);
     try {
-      const { items } = await getWatchlistItems(DEFAULT_USER_ID);
-      const symbols = items?.length ? items.map((i) => i.symbol) : DEFAULT_WATCHLIST_SYMBOLS;
-      const prices = await getStockPrices(symbols);
+      // Step 1: Get all watchlists for the user
+      const { watchlists } = await listWatchlists(DEFAULT_USER_ID);
+      
+      // Step 2: Get the first watchlist's ID (or use 'default' if no watchlists exist)
+      const firstWatchlist = watchlists?.[0];
+      const watchlistId = firstWatchlist?.watchlist_id || 'default';
+      
+      // Store the watchlist ID for use in add/delete operations
+      setCurrentWatchlistId(watchlistId);
+      
+      // Step 3: Fetch items for the watchlist
+      const { items } = await listWatchlistItems(watchlistId, DEFAULT_USER_ID);
+      
+      // Step 4: Extract symbols from items (empty array if no items)
+      const symbols = items?.length ? items.map((i) => i.symbol) : [];
+      
+      // Step 5: Get stock prices for the symbols (only if there are symbols)
+      const prices = symbols.length > 0 ? await getStockPrices(symbols) : [];
       const bySym = Object.fromEntries((prices || []).map((p) => [p.symbol, p]));
+      
+      // Step 6: Combine watchlist items with price data
+      // If no items exist, set empty array
       const rows = items?.length
         ? items.map((i) => {
             const sym = String(i.symbol || '').trim().toUpperCase();
@@ -101,39 +161,30 @@ function Dashboard() {
               isPositive: p.isPositive ?? true,
             };
           })
-        : DEFAULT_WATCHLIST_SYMBOLS.map((s) => {
-            const p = bySym[s] || {};
-            return {
-              symbol: s,
-              price: p.price ?? 0,
-              change: p.change ?? 0,
-              changePercent: p.changePercent ?? 0,
-              isPositive: p.isPositive ?? true,
-            };
-          });
+        : [];
       setWatchlistRows(rows);
     } catch {
-      const prices = await getStockPrices(DEFAULT_WATCHLIST_SYMBOLS);
-      const bySym = Object.fromEntries((prices || []).map((p) => [p.symbol, p]));
-      setWatchlistRows(
-        DEFAULT_WATCHLIST_SYMBOLS.map((s) => {
-          const p = bySym[s] || {};
-          return {
-            symbol: s,
-            price: p.price ?? 0,
-            change: p.change ?? 0,
-            changePercent: p.changePercent ?? 0,
-            isPositive: p.isPositive ?? true,
-          };
-        })
-      );
+      // If any step fails, set empty rows (no fallback to default symbols)
+      setWatchlistRows([]);
     } finally {
       setWatchlistLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // Fetch immediately on mount
     fetchWatchlist();
+    
+    // Set up interval to fetch every minute (60000ms)
+    const intervalId = setInterval(() => {
+      console.log('[Dashboard] Auto-refreshing Watchlist data (1 minute interval)');
+      fetchWatchlist();
+    }, 60000); // 60 seconds = 1 minute
+    
+    // Cleanup interval on unmount
+    return () => {
+      clearInterval(intervalId);
+    };
   }, [fetchWatchlist]);
 
   const [deleteConfirm, setDeleteConfirm] = useState({
@@ -143,14 +194,31 @@ function Dashboard() {
     onConfirm: null,
   });
 
-  const handleAddWatchlist = useCallback(async () => {
-    const sym = addSymbol.trim().toUpperCase();
-    if (!sym) return;
+  /**
+   * Adds a stock to the current watchlist with full details
+   * Uses the watchlist ID from the most recent fetch
+   * @param {Object} itemData - Stock item data: { symbol, instrument_type, exchange, name, notes, alert_settings }
+   * @param {string} watchlistId - The watchlist ID
+   * @param {string} userId - The user ID
+   */
+  const handleAddWatchlist = useCallback(async (itemData, watchlistId, userId) => {
     try {
-      await addWatchlistItem(sym, DEFAULT_USER_ID);
-      setAddSymbol('');
+      // Ensure we have a watchlist ID
+      let targetWatchlistId = watchlistId || currentWatchlistId;
+      if (!targetWatchlistId) {
+        const { watchlists } = await listWatchlists(DEFAULT_USER_ID);
+        targetWatchlistId = watchlists?.[0]?.watchlist_id || 'default';
+        setCurrentWatchlistId(targetWatchlistId);
+      }
+      
+      await addWatchlistItem(itemData, targetWatchlistId, userId || DEFAULT_USER_ID);
       setWatchlistModalOpen(false);
       fetchWatchlist();
+      
+      toast({
+        title: 'Stock added',
+        description: `${itemData.symbol} has been added to your watchlist.`,
+      });
     } catch (e) {
       console.error('Add watchlist item failed:', e?.response?.status, e?.response?.data, e?.message);
       
@@ -161,7 +229,7 @@ function Dashboard() {
         toast({
           variant: 'destructive',
           title: 'Already in watchlist',
-          description: `${sym} is already in your watchlist.`,
+          description: `${itemData.symbol} is already in your watchlist.`,
         });
       } else {
         toast({
@@ -171,18 +239,30 @@ function Dashboard() {
         });
       }
     }
-  }, [addSymbol, fetchWatchlist, toast]);
+  }, [currentWatchlistId, fetchWatchlist, toast]);
 
+  /**
+   * Deletes a watchlist item by ID
+   * Uses the watchlist ID from the most recent fetch
+   */
   const handleDeleteWatchlistItem = useCallback(
     async (itemId) => {
       try {
-        await deleteWatchlistItem(itemId, DEFAULT_USER_ID);
+        // Get current watchlist ID (or fetch it if not available)
+        let watchlistId = currentWatchlistId;
+        if (!watchlistId) {
+          const { watchlists } = await listWatchlists(DEFAULT_USER_ID);
+          watchlistId = watchlists?.[0]?.watchlist_id || 'default';
+          setCurrentWatchlistId(watchlistId);
+        }
+        
+        await deleteWatchlistItem(itemId, watchlistId, DEFAULT_USER_ID);
         fetchWatchlist();
       } catch (e) {
         console.error('Delete watchlist item failed:', e?.response?.status, e?.response?.data, e?.message);
       }
     },
-    [fetchWatchlist]
+    [currentWatchlistId, fetchWatchlist]
   );
 
   const [portfolioRows, setPortfolioRows] = useState([]);
@@ -366,7 +446,7 @@ function Dashboard() {
       
       const msg = e?.response?.data?.detail || e?.response?.data?.message || '';
       
-      if (msg.includes('数字字段溢出') || msg.includes('NumericValueOutOfRange')) {
+      if (msg.includes('NumericValueOutOfRange')) {
         toast({
           variant: 'destructive',
           title: 'Holding amount too large',
@@ -396,7 +476,7 @@ function Dashboard() {
         confirmLabel="Delete"
         onConfirm={runDeleteConfirm}
         onOpenChange={(open) => !open && setDeleteConfirm((p) => ({ ...p, open: false }))}
-      />
+            />
 
       <DashboardHeader />
 
@@ -418,13 +498,15 @@ function Dashboard() {
                 <WatchlistCard
                   rows={watchlistRows}
                   loading={watchlistLoading}
-                  addModalOpen={watchlistModalOpen}
-                  onAddModalClose={() => setWatchlistModalOpen(false)}
                   onHeaderAddClick={() => setWatchlistModalOpen(true)}
-                  addSymbol={addSymbol}
-                  onAddSymbolChange={setAddSymbol}
-                  onAddSubmit={handleAddWatchlist}
                   onDeleteItem={handleDeleteWatchlistItem}
+                />
+                <AddWatchlistItemDialog
+                  open={watchlistModalOpen}
+                  onClose={() => setWatchlistModalOpen(false)}
+                  onAdd={handleAddWatchlist}
+                  watchlistId={currentWatchlistId}
+                  userId={DEFAULT_USER_ID}
                 />
                 <PortfolioCard
                   rows={portfolioRows}
@@ -444,7 +526,7 @@ function Dashboard() {
                   onDeleteItem={handleDeletePortfolioItem}
                   onEditItem={openPortfolioEdit}
                 />
-              </div>
+                    </div>
             </div>
           </div>
         </div>

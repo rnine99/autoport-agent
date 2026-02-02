@@ -6,6 +6,10 @@ for Chinese market search queries.
 """
 
 from src.tools.search_services.bocha.bocha import BochaAPI
-from src.tools.search_services.bocha.bocha_search_tool import BochaSearchTool
+from src.tools.search_services.bocha.bocha_search_tool import (
+    BochaSearchTool,
+    configure,
+    web_search,
+)
 
-__all__ = ["BochaAPI", "BochaSearchTool"]
+__all__ = ["BochaAPI", "BochaSearchTool", "configure", "web_search"]

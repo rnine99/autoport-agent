@@ -1,7 +1,7 @@
 
-import logging
 import functools
-from typing import Any, Callable, Type, TypeVar, Dict, Optional
+import logging
+from typing import Any, Callable, TypeVar, Optional
 from contextvars import ContextVar
 from collections import defaultdict
 
@@ -28,7 +28,7 @@ class ToolUsageTracker:
         Args:
             thread_id: Optional workflow thread identifier for tracker lookup
         """
-        self.usage: Dict[str, int] = defaultdict(int)
+        self.usage: dict[str, int] = defaultdict(int)
         self.thread_id = thread_id
 
     def record_usage(self, tool_name: str, count: int = 1) -> None:
@@ -43,7 +43,7 @@ class ToolUsageTracker:
             self.usage[tool_name] += count
             logger.debug(f"[ToolUsageTracker] Recorded {tool_name} x{count}")
 
-    def get_summary(self) -> Dict[str, int]:
+    def get_summary(self) -> dict[str, int]:
         """
         Get usage summary as a regular dict.
 
@@ -100,7 +100,7 @@ def get_tool_tracker() -> Optional[ToolUsageTracker]:
     return tracker
 
 
-def stop_tool_tracking() -> Optional[Dict[str, int]]:
+def stop_tool_tracking() -> Optional[dict[str, int]]:
     """
     Stop tracking and return usage summary.
 
@@ -123,111 +123,59 @@ def stop_tool_tracking() -> Optional[Dict[str, int]]:
 
 
 def log_io(func: Callable) -> Callable:
-    """
-    A decorator that logs the input parameters and output of a tool function.
-
-    Args:
-        func: The tool function to be decorated
-
-    Returns:
-        The wrapped function with input/output logging
-    """
+    """Decorator that logs input parameters and output of a function."""
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Log input parameters
         func_name = func.__name__
         params = ", ".join(
             [*(str(arg) for arg in args), *(f"{k}={v}" for k, v in kwargs.items())]
         )
-        logger.debug(f"开始工具调用 {func_name} 参数: {params}")
-
-        # Execute the function
+        logger.debug(f"Tool call start {func_name} params: {params}")
         result = func(*args, **kwargs)
-
-        # Log the output
-        logger.debug(f"工具调用结束 {func_name} 结果: {result}")
-
+        logger.debug(f"Tool call end {func_name}")
         return result
 
     return wrapper
 
 
-class LoggedToolMixin:
-    """A mixin class that adds logging and usage tracking to any tool."""
-
-    def _log_operation(self, method_name: str, *args: Any, **kwargs: Any) -> None:
-        """Helper method to log tool operations."""
-        tool_name = self.__class__.__name__.replace("Logged", "")
-        params = ", ".join(
-            [*(str(arg) for arg in args), *(f"{k}={v}" for k, v in kwargs.items())]
-        )
-        logger.debug(f"开始工具调用 {tool_name}.{method_name} 参数: {params}")
-
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
-        """Override _run method to add logging and usage tracking."""
-        # Get base tool name (without "Logged" prefix)
-        tool_name = self.__class__.__name__.replace("Logged", "")
-
-        # Log operation start
-        self._log_operation("_run", *args, **kwargs)
-
-        # Track tool usage (if tracker is active)
-        tracker = get_tool_tracker()
-        if tracker:
-            tracker.record_usage(tool_name, count=1)
-        else:
-            logger.debug(f"[ToolUsageTracker] No tracker available, skipping usage recording for tool={tool_name}")
-
-        # Execute the tool
-        result = super()._run(*args, **kwargs)
-
-        # Log operation end
-        logger.debug(
-            f"工具调用结束 {tool_name} 结果: {result}"
-        )
-
-        return result
-
-    async def _arun(self, *args: Any, **kwargs: Any) -> Any:
-        """Override _arun method to add logging and usage tracking (async version)."""
-        # Get base tool name (without "Logged" prefix)
-        tool_name = self.__class__.__name__.replace("Logged", "")
-
-        # Log operation start
-        self._log_operation("_arun", *args, **kwargs)
-
-        # Track tool usage (if tracker is active)
-        tracker = get_tool_tracker()
-        if tracker:
-            tracker.record_usage(tool_name, count=1)
-        else:
-            logger.debug(f"[ToolUsageTracker] No tracker available, skipping usage recording for tool={tool_name}")
-
-        # Execute the tool (async)
-        result = await super()._arun(*args, **kwargs)
-
-        # Log operation end
-        logger.debug(
-            f"工具调用结束 {tool_name} 结果: {result}"
-        )
-
-        return result
-
-def create_logged_tool(base_tool_class: Type[T]) -> Type[T]:
+def create_logged_tool(tool_instance: T, name: Optional[str] = None) -> T:
     """
-    Factory function to create a logged version of any tool class.
+    Wrap a StructuredTool instance with usage tracking.
 
     Args:
-        base_tool_class: The original tool class to be enhanced with logging
+        tool_instance: A StructuredTool instance (from @tool decorator)
+        name: Optional name override for the tool
 
     Returns:
-        A new class that inherits from both LoggedToolMixin and the base tool class
+        A new tool instance with usage tracking
     """
+    from langchain_core.tools import StructuredTool
 
-    class LoggedTool(LoggedToolMixin, base_tool_class):
-        pass
+    if not isinstance(tool_instance, StructuredTool):
+        raise TypeError(f"Expected StructuredTool instance, got {type(tool_instance)}")
 
-    # Set a more descriptive name for the class
-    LoggedTool.__name__ = f"Logged{base_tool_class.__name__}"
-    return LoggedTool
+    original_coroutine = tool_instance.coroutine
+    original_func = tool_instance.func
+    tool_name = name or tool_instance.name
+
+    async def tracked_coroutine(*args: Any, **kwargs: Any) -> Any:
+        tracker = get_tool_tracker()
+        if tracker:
+            tracker.record_usage(tool_name, count=1)
+        return await original_coroutine(*args, **kwargs)
+
+    def tracked_func(*args: Any, **kwargs: Any) -> Any:
+        tracker = get_tool_tracker()
+        if tracker:
+            tracker.record_usage(tool_name, count=1)
+        return original_func(*args, **kwargs)
+
+    tracked_tool = tool_instance.copy()
+    tracked_tool.name = tool_name
+    if original_coroutine:
+        tracked_tool.coroutine = tracked_coroutine
+    if original_func:
+        tracked_tool.func = tracked_func
+
+    return tracked_tool

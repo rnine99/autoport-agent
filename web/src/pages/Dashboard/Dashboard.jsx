@@ -18,6 +18,7 @@ import {
 } from './utils/api';
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '@/components/ui/use-toast';
+import { getWorkspaces, createWorkspace } from '../ChatAgent/utils/api';
 import DashboardHeader from './components/DashboardHeader';
 import ConfirmDialog from './components/ConfirmDialog';
 import IndexMovementCard from './components/IndexMovementCard';
@@ -93,6 +94,33 @@ function Dashboard() {
       clearInterval(intervalId);
     };
   }, [fetchIndices]);
+
+  /**
+   * Check and create "Stealth Agent" default workspace on Dashboard load
+   */
+  useEffect(() => {
+    const ensureDefaultWorkspace = async () => {
+      try {
+        const { workspaces } = await getWorkspaces(DEFAULT_USER_ID);
+        const stealthAgentWorkspace = workspaces?.find(
+          (ws) => ws.name === 'Stealth Agent'
+        );
+        
+        if (!stealthAgentWorkspace) {
+          // Create default workspace if it doesn't exist
+          await createWorkspace(
+            'Stealth Agent',
+            'system default workspace, cannot be deleted'
+          );
+        }
+      } catch (error) {
+        // Silently fail - user can still use the app
+        console.error('[Dashboard] Error ensuring default workspace:', error);
+      }
+    };
+
+    ensureDefaultWorkspace();
+  }, []);
 
   const [watchlistRows, setWatchlistRows] = useState([]);
   const [watchlistLoading, setWatchlistLoading] = useState(true);

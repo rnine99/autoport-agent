@@ -1,23 +1,59 @@
 import React, { useState } from 'react';
-import { ChevronDown, Globe, Plus, Send, Zap } from 'lucide-react';
+import { ChevronDown, Globe, Plus, Send, Zap, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '../../../components/ui/card';
 import { Input } from '../../../components/ui/input';
 import { useNavigate } from 'react-router-dom';
-import { getWorkspaces, DEFAULT_USER_ID } from '../../ChatAgent/utils/api';
+import { getWorkspaces, createWorkspace, DEFAULT_USER_ID } from '../../ChatAgent/utils/api';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../../components/ui/dialog';
 import { useToast } from '../../../components/ui/use-toast';
 
+const DEFAULT_WORKSPACE_NAME = 'Stealth Agent';
+const DEFAULT_WORKSPACE_DESCRIPTION = 'system default workspace, cannot be deleted';
+
 /**
  * Chat input strip matching ChatAgent input bar.
- * When user sends a message, navigates to ChatAgent page with first workspace.
+ * When user sends a message, navigates to ChatAgent page with "Stealth Agent" workspace.
+ * Creates the workspace if it doesn't exist.
  */
 function ChatInputCard() {
   const [message, setMessage] = useState('');
   const [planMode, setPlanMode] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [showNoWorkspaceDialog, setShowNoWorkspaceDialog] = useState(false);
+  const [showCreatingDialog, setShowCreatingDialog] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  /**
+   * Finds or creates the "Stealth Agent" workspace
+   * @returns {Promise<string>} The workspace ID
+   */
+  const findOrCreateDefaultWorkspace = async () => {
+    // Fetch user's workspaces
+    const { workspaces } = await getWorkspaces(DEFAULT_USER_ID);
+    
+    // Look for "Stealth Agent" workspace
+    const stealthAgentWorkspace = workspaces?.find(
+      (ws) => ws.name === DEFAULT_WORKSPACE_NAME
+    );
+    
+    if (stealthAgentWorkspace) {
+      return stealthAgentWorkspace.workspace_id;
+    }
+    
+    // If not found, create it
+    setShowCreatingDialog(true);
+    try {
+      const newWorkspace = await createWorkspace(
+        DEFAULT_WORKSPACE_NAME,
+        DEFAULT_WORKSPACE_DESCRIPTION
+      );
+      setShowCreatingDialog(false);
+      return newWorkspace.workspace_id;
+    } catch (error) {
+      setShowCreatingDialog(false);
+      throw error;
+    }
+  };
 
   const handleSend = async () => {
     if (!message.trim() || isLoading) {
@@ -26,19 +62,8 @@ function ChatInputCard() {
 
     setIsLoading(true);
     try {
-      // Fetch user's workspaces
-      const { workspaces } = await getWorkspaces(DEFAULT_USER_ID);
-      
-      if (!workspaces || workspaces.length === 0) {
-        // Show popup if no workspace exists
-        setShowNoWorkspaceDialog(true);
-        setIsLoading(false);
-        return;
-      }
-
-      // Get first workspace
-      const firstWorkspace = workspaces[0];
-      const workspaceId = firstWorkspace.workspace_id;
+      // Find or create "Stealth Agent" workspace
+      const workspaceId = await findOrCreateDefaultWorkspace();
 
       // Navigate to ChatAgent page with workspace and message in state
       navigate(`/chat/${workspaceId}`, {
@@ -51,11 +76,11 @@ function ChatInputCard() {
       // Clear input
       setMessage('');
     } catch (error) {
-      console.error('Error fetching workspaces:', error);
+      console.error('Error with workspace:', error);
       toast({
         variant: 'destructive',
         title: 'Error',
-        description: 'Failed to fetch workspaces. Please try again.',
+        description: 'Failed to access workspace. Please try again.',
       });
     } finally {
       setIsLoading(false);
@@ -139,37 +164,19 @@ function ChatInputCard() {
         </CardContent>
       </Card>
 
-      {/* No Workspace Dialog */}
-      <Dialog open={showNoWorkspaceDialog} onOpenChange={setShowNoWorkspaceDialog}>
+      {/* Creating Workspace Dialog */}
+      <Dialog open={showCreatingDialog} onOpenChange={() => {}}>
         <DialogContent className="sm:max-w-md text-white border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
           <DialogHeader>
             <DialogTitle className="dashboard-title-font" style={{ color: 'var(--color-text-primary)' }}>
-              No Workspace Found
+              Creating Workspace
             </DialogTitle>
             <DialogDescription style={{ color: 'var(--color-text-secondary)' }}>
-              You need to create a workspace before you can start chatting. Please go to the Chat Agent page to create one.
+              Creating your default "Stealth Agent" workspace. Please wait...
             </DialogDescription>
           </DialogHeader>
-          <div className="flex justify-end gap-2 pt-4">
-            <button
-              type="button"
-              onClick={() => setShowNoWorkspaceDialog(false)}
-              className="px-4 py-2 rounded-md text-sm font-medium transition-colors hover:bg-white/10"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              Close
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowNoWorkspaceDialog(false);
-                navigate('/chat');
-              }}
-              className="px-4 py-2 rounded-md text-sm font-medium transition-colors hover:opacity-90"
-              style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
-            >
-              Go to Chat Agent
-            </button>
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="h-6 w-6 animate-spin" style={{ color: 'var(--color-accent-primary)' }} />
           </div>
         </DialogContent>
       </Dialog>

@@ -340,7 +340,7 @@ class CheckpointResponse(BaseModel):
     """
     checkpoint_id: str = Field(..., description="Unique checkpoint identifier")
     parent_checkpoint_id: Optional[str] = Field(None, description="Parent checkpoint for lineage tracking")
-    created_at: datetime = Field(..., description="Checkpoint creation timestamp")
+    created_at: Optional[datetime] = Field(None, description="Checkpoint creation timestamp")
     metadata: CheckpointMetadata = Field(..., description="Checkpoint metadata")
     next_nodes: List[str] = Field(default_factory=list, description="Next nodes to execute")
     pending_tasks: int = Field(0, description="Number of pending tasks")

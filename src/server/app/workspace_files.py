@@ -45,6 +45,22 @@ _ALWAYS_HIDDEN_SUFFIXES = (".pyc",)
 DEFAULT_READ_LIMIT_LINES = 20_000
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB
 
+# Known binary file extensions that cannot be read as text
+_BINARY_EXTENSIONS = frozenset({
+    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff",
+    ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+    ".exe", ".dll", ".so", ".dylib",
+    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".sqlite", ".db", ".pickle", ".pkl",
+})
+
+
+def _is_binary(path: str) -> bool:
+    """Check if file extension suggests binary content."""
+    suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return f".{suffix}" in _BINARY_EXTENSIONS
+
 
 def _require_workspace_owner(workspace: dict[str, Any] | None, *, user_id: str, workspace_id: str) -> None:
     if not workspace:
@@ -210,10 +226,30 @@ async def read_workspace_file(
     if error:
         raise HTTPException(status_code=403, detail=error)
 
-    # Range read keeps payloads bounded.
-    content = await sandbox.aread_file_range(normalized, offset=offset, limit=limit)
-    if content is None:
+    # Download raw bytes first to distinguish "not found" from "binary file"
+    raw_bytes = await sandbox.adownload_file_bytes(normalized)
+    if raw_bytes is None:
         raise HTTPException(status_code=404, detail="File not found")
+
+    # Check for known binary extensions
+    if _is_binary(normalized):
+        raise HTTPException(
+            status_code=415,
+            detail="Cannot read binary file as text. Use GET /files/download instead.",
+        )
+
+    # Try to decode as UTF-8
+    try:
+        text_content = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=415,
+            detail="File appears to be binary and cannot be read as text. Use GET /files/download instead.",
+        )
+
+    # Apply line range
+    lines = text_content.splitlines()
+    content = "\n".join(lines[offset : offset + limit])
 
     client_path = _to_client_path(sandbox, normalized)
     if _is_always_hidden_path(client_path):

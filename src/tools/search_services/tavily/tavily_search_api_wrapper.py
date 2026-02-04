@@ -1,28 +1,36 @@
 import asyncio
-import json
 import logging
+import os
 from typing import Dict, List, Optional
 
-import httpx
-from langchain_community.utilities.tavily_search import (
-    TavilySearchAPIWrapper as OriginalTavilySearchAPIWrapper,
-)
+from tavily import AsyncTavilyClient
 
 from src.tools.utils.validation_utils import validate_image_url
 
 logger = logging.getLogger(__name__)
 
-TAVILY_API_URL = "https://api.tavily.com"
 
+class TavilySearchWrapper:
+    """Tavily search API wrapper using official AsyncTavilyClient SDK."""
 
-class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        country: Optional[str] = None,
+    ):
+        self._api_key = api_key or os.environ.get("TAVILY_API_KEY", "")
+        if not self._api_key:
+            raise ValueError("TAVILY_API_KEY not provided or found in environment")
+        self._client = AsyncTavilyClient(api_key=self._api_key)
+        self._country = country
+
     async def raw_results(
         self,
         query: str,
         max_results: Optional[int] = 5,
         search_depth: Optional[str] = "advanced",
-        include_domains: Optional[List[str]] = [],
-        exclude_domains: Optional[List[str]] = [],
+        include_domains: Optional[List[str]] = None,
+        exclude_domains: Optional[List[str]] = None,
         include_answer: Optional[bool] = False,
         include_raw_content: Optional[bool] = False,
         include_images: Optional[bool] = False,
@@ -32,38 +40,48 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         topic: Optional[str] = None,
+        country: Optional[str] = None,
     ) -> Dict:
-        """Get results from the Tavily Search API asynchronously."""
+        """Get results from the Tavily Search API"""
+        # Determine country: method param > instance config
+        effective_country = country or self._country
 
-        params = {
-            "api_key": self.tavily_api_key.get_secret_value(),
+        # Build search kwargs
+        kwargs = {
             "query": query,
             "max_results": max_results,
             "search_depth": search_depth,
-            "include_domains": include_domains,
-            "exclude_domains": exclude_domains,
+            "include_domains": include_domains or [],
+            "exclude_domains": exclude_domains or [],
             "include_answer": include_answer,
             "include_raw_content": include_raw_content,
             "include_images": include_images,
             "include_image_descriptions": include_image_descriptions,
-            "include_favicon": include_favicon,
         }
-        # Add optional time filtering parameters
-        if time_range:
-            params["time_range"] = time_range
-        if start_date:
-            params["start_date"] = start_date
-        if end_date:
-            params["end_date"] = end_date
-        if topic:
-            params["topic"] = topic
 
-        async with httpx.AsyncClient(http2=True, timeout=30.0) as client:
-            res = await client.post(f"{TAVILY_API_URL}/search", json=params)
-            if res.status_code == 200:
-                return res.json()
+        # Optional parameters
+        if include_favicon:
+            kwargs["include_favicon"] = include_favicon
+        if time_range:
+            kwargs["time_range"] = time_range
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        if topic:
+            kwargs["topic"] = topic
+
+        # Country only valid for topic="general" (or no topic)
+        if effective_country:
+            if topic is None or topic == "general":
+                kwargs["country"] = effective_country
             else:
-                raise Exception(f"Error {res.status_code}: {res.reason_phrase}")
+                logger.warning(
+                    f"country='{effective_country}' ignored: only valid for topic='general', "
+                    f"but topic='{topic}' was specified"
+                )
+
+        return await self._client.search(**kwargs)
 
     async def clean_results_with_images(
         self, raw_results: Dict[str, List[Dict]]
@@ -157,12 +175,3 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         logger.debug(f"Image validation: {len(valid_images)}/{len(images)} images accessible")
 
         return clean_results
-
-
-if __name__ == "__main__":
-    async def main():
-        wrapper = EnhancedTavilySearchAPIWrapper()
-        results = await wrapper.raw_results("cute panda", include_images=True)
-        print(json.dumps(results, indent=2, ensure_ascii=False))
-
-    asyncio.run(main())

@@ -1,4 +1,4 @@
-from .tavily_search_api_wrapper import EnhancedTavilySearchAPIWrapper
+from .tavily_search_api_wrapper import TavilySearchWrapper
 from .tavily_search_tool import (
     TavilySearchTool,
     configure,
@@ -6,7 +6,7 @@ from .tavily_search_tool import (
 )
 
 __all__ = [
-    "EnhancedTavilySearchAPIWrapper",
+    "TavilySearchWrapper",
     "TavilySearchTool",
     "configure",
     "web_search",

@@ -8,13 +8,13 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from langchain_core.tools import tool
 
 from src.tools.search_services.tavily.tavily_search_api_wrapper import (
-    EnhancedTavilySearchAPIWrapper,
+    TavilySearchWrapper,
 )
 
 logger = logging.getLogger(__name__)
 
 # Module-level configuration
-_api_wrapper: Optional[EnhancedTavilySearchAPIWrapper] = None
+_api_wrapper: Optional[TavilySearchWrapper] = None
 _max_results: int = 10
 _default_time_range: Optional[str] = None
 _verbose: bool = True
@@ -23,13 +23,14 @@ _include_domains: Optional[List[str]] = None
 _exclude_domains: Optional[List[str]] = None
 _include_answer: bool = False
 _include_favicon: bool = True
+_country: Optional[str] = None
 
 
-def _get_api_wrapper() -> EnhancedTavilySearchAPIWrapper:
+def _get_api_wrapper() -> TavilySearchWrapper:
     """Get or create the API wrapper instance."""
     global _api_wrapper
     if _api_wrapper is None:
-        _api_wrapper = EnhancedTavilySearchAPIWrapper()
+        _api_wrapper = TavilySearchWrapper(country=_country)
     return _api_wrapper
 
 
@@ -42,6 +43,7 @@ def configure(
     exclude_domains: Optional[List[str]] = None,
     include_answer: bool = False,
     include_favicon: bool = True,
+    country: Optional[str] = None,
 ) -> None:
     """Configure the Tavily search tool settings.
 
@@ -57,9 +59,12 @@ def configure(
         exclude_domains: List of domains to exclude from search.
         include_answer: Whether to include Tavily's answer in results.
         include_favicon: Whether to include favicon URLs in artifact.
+        country: Country for localized results (lowercase, e.g., "united states").
+            Only valid for topic="general". Examples: "china", "japan", "germany".
     """
-    global _max_results, _default_time_range, _verbose, _search_depth
+    global _api_wrapper, _max_results, _default_time_range, _verbose, _search_depth
     global _include_domains, _exclude_domains, _include_answer, _include_favicon
+    global _country
 
     _max_results = max_results
     _default_time_range = default_time_range
@@ -69,6 +74,8 @@ def configure(
     _exclude_domains = exclude_domains or []
     _include_answer = include_answer
     _include_favicon = include_favicon
+    _country = country
+    _api_wrapper = None  # Reset wrapper to pick up new country config
 
 
 def _validate_date_format(date_str: Optional[str]) -> Optional[str]:

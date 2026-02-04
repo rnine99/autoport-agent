@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Financial Data MCP Server.
+"""Price Data MCP Server.
 
-This server provides programmatic access to normalized OHLCV time series via MCP.
+Provides normalized OHLCV time series data via MCP.
 
 Design goals:
 - Small, stable tool surface (high PTC value)
@@ -22,7 +22,7 @@ from typing import Any, Optional
 from mcp.server.fastmcp import FastMCP
 
 
-mcp = FastMCP("FinancialDataMCP")
+mcp = FastMCP("PriceDataMCP")
 
 
 _INTRADAY_INTERVALS_STOCK = {"1min", "5min", "15min", "30min", "1hour", "4hour"}

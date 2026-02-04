@@ -28,17 +28,29 @@ mcp:
   # Note: Filesystem is now a first-class tool (see filesystem section below)
   # Each server can have 'enabled: true/false' to enable/disable it (default: true)
   servers:
-    # Unified financial data MCP gateway.
+    # Price data MCP server for OHLCV time series.
     # OSS/dev: stdio server inside sandbox, uses user's own FMP_API_KEY.
     # Production: configure this server to use transport: http/sse and a hosted URL.
-    - name: "financial_data"
+    - name: "price_data"
       enabled: true
-      description: "Unified market + fundamentals gateway"
-      instruction: "Advanced programmatic data access. Use for raw OHLCV (get_stock_data/get_asset_data) and future fundamentals endpoints."
+      description: "OHLCV price data for stocks, commodities, crypto, forex"
+      instruction: "Use for raw OHLCV time series data (get_stock_data/get_asset_data). Supports daily and intraday intervals."
       tool_exposure_mode: "detailed"
       transport: "stdio"
       command: "uv"
-      args: ["run", "python", "mcp_servers/financial_data_mcp_server.py"]
+      args: ["run", "python", "mcp_servers/price_data_mcp_server.py"]
+      env:
+        FMP_API_KEY: "${FMP_API_KEY}"
+
+    # Fundamentals MCP server for financial statements, ratios, growth, and valuation.
+    - name: "fundamentals"
+      enabled: true
+      description: "Raw fundamental data for multi-year analysis"
+      instruction: "Use for financial statements, ratios, growth metrics, and valuation data. Returns raw JSON for programmatic analysis and charting."
+      tool_exposure_mode: "summary"
+      transport: "stdio"
+      command: "uv"
+      args: ["run", "python", "mcp_servers/fundamentals_mcp_server.py"]
       env:
         FMP_API_KEY: "${FMP_API_KEY}"
 

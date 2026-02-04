@@ -8,8 +8,8 @@ Design goals:
 - Do not inline secrets into sandbox-uploaded code.
 
 MCP convention:
-- The market/fundamentals MCP server should be named `financial_data`.
-  When running inside a PTC sandbox, this will be available as `tools.financial_data`.
+- The price data MCP server should be named `price_data`.
+  When running inside a PTC sandbox, this will be available as `tools.price_data`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Any, Optional
 from .fmp import FMPClient
 
 
-MCP_SERVER_NAME = "financial_data"
+MCP_SERVER_NAME = "price_data"
 
 
 class FinancialDataBackendError(RuntimeError):
@@ -78,7 +78,7 @@ async def get_stock_data(
 ) -> FinancialDataResult:
     """Unified OHLCV fetch.
 
-    Returns raw rows (list of dicts). In sandbox, prefers MCP (`tools.financial_data`).
+    Returns raw rows (list of dicts). In sandbox, prefers MCP (`tools.price_data`).
     In host-only mode, falls back to direct provider access.
     """
 
@@ -183,7 +183,7 @@ async def get_asset_data(
 ) -> FinancialDataResult:
     """Unified OHLCV fetch for stock/commodity/crypto/forex.
 
-    In sandbox, prefers MCP (`tools.financial_data.get_asset_data`).
+    In sandbox, prefers MCP (`tools.price_data.get_asset_data`).
     """
 
     mcp_module = _try_import_mcp_module()

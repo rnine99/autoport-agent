@@ -1,14 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { ChevronDown, Globe, Plus, Send, Zap, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '../../../components/ui/card';
 import { Input } from '../../../components/ui/input';
-import { useNavigate } from 'react-router-dom';
-import { getWorkspaces, createWorkspace, DEFAULT_USER_ID } from '../../ChatAgent/utils/api';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../../components/ui/dialog';
-import { useToast } from '../../../components/ui/use-toast';
-
-const DEFAULT_WORKSPACE_NAME = 'Stealth Agent';
-const DEFAULT_WORKSPACE_DESCRIPTION = 'system default workspace, cannot be deleted';
+import { useChatInput } from '../hooks/useChatInput';
 
 /**
  * Chat input strip matching ChatAgent input bar.
@@ -16,83 +11,16 @@ const DEFAULT_WORKSPACE_DESCRIPTION = 'system default workspace, cannot be delet
  * Creates the workspace if it doesn't exist.
  */
 function ChatInputCard() {
-  const [message, setMessage] = useState('');
-  const [planMode, setPlanMode] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [showCreatingDialog, setShowCreatingDialog] = useState(false);
-  const navigate = useNavigate();
-  const { toast } = useToast();
-
-  /**
-   * Finds or creates the "Stealth Agent" workspace
-   * @returns {Promise<string>} The workspace ID
-   */
-  const findOrCreateDefaultWorkspace = async () => {
-    // Fetch user's workspaces
-    const { workspaces } = await getWorkspaces(DEFAULT_USER_ID);
-    
-    // Look for "Stealth Agent" workspace
-    const stealthAgentWorkspace = workspaces?.find(
-      (ws) => ws.name === DEFAULT_WORKSPACE_NAME
-    );
-    
-    if (stealthAgentWorkspace) {
-      return stealthAgentWorkspace.workspace_id;
-    }
-    
-    // If not found, create it
-    setShowCreatingDialog(true);
-    try {
-      const newWorkspace = await createWorkspace(
-        DEFAULT_WORKSPACE_NAME,
-        DEFAULT_WORKSPACE_DESCRIPTION
-      );
-      setShowCreatingDialog(false);
-      return newWorkspace.workspace_id;
-    } catch (error) {
-      setShowCreatingDialog(false);
-      throw error;
-    }
-  };
-
-  const handleSend = async () => {
-    if (!message.trim() || isLoading) {
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      // Find or create "Stealth Agent" workspace
-      const workspaceId = await findOrCreateDefaultWorkspace();
-
-      // Navigate to ChatAgent page with workspace and message in state
-      navigate(`/chat/${workspaceId}`, {
-        state: {
-          initialMessage: message.trim(),
-          planMode: planMode,
-        },
-      });
-      
-      // Clear input
-      setMessage('');
-    } catch (error) {
-      console.error('Error with workspace:', error);
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to access workspace. Please try again.',
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  const {
+    message,
+    setMessage,
+    planMode,
+    setPlanMode,
+    isLoading,
+    showCreatingDialog,
+    handleSend,
+    handleKeyPress,
+  } = useChatInput();
 
   return (
     <>

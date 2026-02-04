@@ -8,6 +8,7 @@ import {
   deletePortfolioHolding,
   deleteWatchlistItem,
   fallbackIndex,
+  getCurrentUser,
   getIndices,
   getPortfolio,
   getStockPrices,
@@ -16,9 +17,10 @@ import {
   normalizeIndexSymbol,
   updatePortfolioHolding,
 } from './utils/api';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '@/components/ui/use-toast';
 import { getWorkspaces, createWorkspace } from '../ChatAgent/utils/api';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
 import DashboardHeader from './components/DashboardHeader';
 import ConfirmDialog from './components/ConfirmDialog';
 import IndexMovementCard from './components/IndexMovementCard';
@@ -57,8 +59,15 @@ const RESEARCH_ITEMS = [
     { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
   ];
 
+// Module-level variable to track onboarding check across component mounts/unmounts
+// Resets on page refresh (module reload)
+let onboardingCheckedThisSession = false;
+
 function Dashboard() {
   const { toast } = useToast();
+  
+  // Onboarding check state
+  const [showOnboardingDialog, setShowOnboardingDialog] = useState(false);
   
   const [indices, setIndices] = useState(() =>
     INDEX_SYMBOLS.map((s) => fallbackIndex(normalizeIndexSymbol(s)))
@@ -120,6 +129,39 @@ function Dashboard() {
     };
 
     ensureDefaultWorkspace();
+  }, []);
+
+  /**
+   * Check onboarding completion status on Dashboard load
+   * Only checks once per session (first load or refresh)
+   * Uses module-level variable to persist across component mounts/unmounts
+   */
+  useEffect(() => {
+    // Only check if we haven't checked yet in this session
+    if (onboardingCheckedThisSession) {
+      return;
+    }
+
+    const checkOnboarding = async () => {
+      try {
+        const userData = await getCurrentUser(DEFAULT_USER_ID);
+        const onboardingCompleted = userData?.user?.onboarding_completed;
+        
+        // Mark as checked to prevent showing again in this session
+        onboardingCheckedThisSession = true;
+        
+        // Show dialog if onboarding is not completed
+        if (onboardingCompleted === false) {
+          setShowOnboardingDialog(true);
+        }
+      } catch (error) {
+        // Silently fail - don't block user from using the app
+        console.error('[Dashboard] Error checking onboarding status:', error);
+        onboardingCheckedThisSession = true; // Mark as checked even on error
+      }
+    };
+
+    checkOnboarding();
   }, []);
 
   const [watchlistRows, setWatchlistRows] = useState([]);
@@ -478,6 +520,38 @@ function Dashboard() {
         onConfirm={runDeleteConfirm}
         onOpenChange={(open) => !open && setDeleteConfirm((p) => ({ ...p, open: false }))}
             />
+
+      {/* Onboarding Incomplete Dialog */}
+      <Dialog open={showOnboardingDialog} onOpenChange={setShowOnboardingDialog}>
+        <DialogContent className="sm:max-w-md text-white border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
+          <DialogHeader>
+            <DialogTitle className="dashboard-title-font" style={{ color: 'var(--color-text-primary)' }}>
+              Preference Information Incomplete
+            </DialogTitle>
+            <DialogDescription style={{ color: 'var(--color-text-secondary)' }}>
+              Your preference information is not complete. Please complete your preferences to get the best experience with the agent.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-4">
+            <button
+              type="button"
+              onClick={() => setShowOnboardingDialog(false)}
+              className="px-4 py-2 rounded-md text-sm font-medium transition-colors hover:bg-white/10"
+              style={{ color: 'var(--color-text-primary)' }}
+            >
+              Ignore
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowOnboardingDialog(false)}
+              className="px-4 py-2 rounded-md text-sm font-medium transition-colors hover:opacity-90"
+              style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
+            >
+              Proceed
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <DashboardHeader />
 

@@ -371,6 +371,13 @@ class WorkspaceManager:
                     "Please wait and try again."
                 )
 
+            elif status == "flash":
+                # Flash workspaces have no sandbox - cannot be used for PTC mode
+                raise ValueError(
+                    f"Workspace {workspace_id} is a flash workspace (no sandbox). "
+                    "Use agent_mode='flash' instead, or create a new workspace for PTC mode."
+                )
+
             else:
                 raise RuntimeError(f"Unknown workspace status: {status}")
 

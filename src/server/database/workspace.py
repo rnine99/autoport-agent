@@ -8,7 +8,6 @@ Each workspace has a 1:1 mapping with a Daytona sandbox.
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID
 
 from psycopg.rows import dict_row
 
@@ -28,6 +27,8 @@ async def create_workspace(
     description: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
     conn=None,
+    workspace_id: Optional[str] = None,
+    status: str = "creating",
 ) -> Dict[str, Any]:
     """
     Create a new workspace entry.
@@ -38,6 +39,8 @@ async def create_workspace(
         description: Optional workspace description
         config: Optional configuration as JSON
         conn: Optional database connection to reuse
+        workspace_id: Optional specific workspace ID (UUID). If None, auto-generated.
+        status: Initial status (default: "creating", use "flash" for flash workspaces)
 
     Returns:
         Created workspace record as dict
@@ -48,15 +51,28 @@ async def create_workspace(
         config_json = Json(config) if config else Json({})
 
         async def _execute(cur):
-            await cur.execute(
-                """
-                INSERT INTO workspaces (user_id, name, description, config)
-                VALUES (%s, %s, %s, %s)
-                RETURNING workspace_id, user_id, name, description, sandbox_id,
-                          status, created_at, updated_at, last_activity_at, stopped_at, config
-                """,
-                (user_id, name, description, config_json),
-            )
+            if workspace_id:
+                # Use specific workspace_id (for flash mode: workspace_id = thread_id)
+                await cur.execute(
+                    """
+                    INSERT INTO workspaces (workspace_id, user_id, name, description, config, status)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING workspace_id, user_id, name, description, sandbox_id,
+                              status, created_at, updated_at, last_activity_at, stopped_at, config
+                    """,
+                    (workspace_id, user_id, name, description, config_json, status),
+                )
+            else:
+                # Auto-generate workspace_id
+                await cur.execute(
+                    """
+                    INSERT INTO workspaces (user_id, name, description, config, status)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING workspace_id, user_id, name, description, sandbox_id,
+                              status, created_at, updated_at, last_activity_at, stopped_at, config
+                    """,
+                    (user_id, name, description, config_json, status),
+                )
             return await cur.fetchone()
 
         if conn:

@@ -38,7 +38,9 @@ class Session:
             sandbox_id: Optional existing sandbox ID to reconnect to instead of creating new
         """
         if self._initialized:
-            logger.warning("Session already initialized", conversation_id=self.conversation_id)
+            logger.warning(
+                "Session already initialized", conversation_id=self.conversation_id
+            )
             return
 
         logger.info(
@@ -86,6 +88,42 @@ class Session:
 
         logger.info("Session initialized", conversation_id=self.conversation_id)
 
+    async def initialize_lazy(self, sandbox_id: str) -> None:
+        """Initialize session with lazy sandbox startup.
+
+        MCP registry connects immediately, sandbox starts in background.
+        Use for stopped workspaces to reduce latency.
+
+        Args:
+            sandbox_id: Existing sandbox ID to reconnect to
+        """
+        if self._initialized:
+            logger.warning(
+                "Session already initialized", conversation_id=self.conversation_id
+            )
+            return
+
+        logger.info(
+            "Lazy initializing session",
+            conversation_id=self.conversation_id,
+            sandbox_id=sandbox_id,
+        )
+
+        # Initialize MCP registry (required for system prompt)
+        self.mcp_registry = MCPRegistry(self.config)
+        await self.mcp_registry.connect_all()
+
+        # Create sandbox and start lazy init
+        self.sandbox = PTCSandbox(self.config, self.mcp_registry)
+        self.sandbox.start_lazy_init(sandbox_id)
+
+        self._initialized = True
+
+        logger.info(
+            "Session lazy-initialized (sandbox starting in background)",
+            conversation_id=self.conversation_id,
+        )
+
     async def get_sandbox(self) -> PTCSandbox | None:
         """Get the sandbox for this session (initializes if needed).
 
@@ -124,7 +162,9 @@ class Session:
         It should, however, ensure the next start/restart path actually
         reinitializes and reconnects.
         """
-        logger.info("Stopping session for persistence", conversation_id=self.conversation_id)
+        logger.info(
+            "Stopping session for persistence", conversation_id=self.conversation_id
+        )
 
         if self.sandbox:
             await self.sandbox.stop_sandbox()

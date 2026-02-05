@@ -62,7 +62,9 @@ def _is_binary(path: str) -> bool:
     return f".{suffix}" in _BINARY_EXTENSIONS
 
 
-def _require_workspace_owner(workspace: dict[str, Any] | None, *, user_id: str, workspace_id: str) -> None:
+def _require_workspace_owner(
+    workspace: dict[str, Any] | None, *, user_id: str, workspace_id: str
+) -> None:
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -126,7 +128,7 @@ def _normalize_requested_path(path: str) -> str:
 
     normalized = raw
     if normalized.startswith("/home/daytona/"):
-        normalized = normalized[len("/home/daytona/"):]
+        normalized = normalized[len("/home/daytona/") :]
     if normalized.startswith("/"):
         normalized = normalized[1:]
     if normalized.startswith("./"):
@@ -159,8 +161,17 @@ async def list_workspace_files(
     workspace_id: str,
     x_user_id: str = Header(..., alias="X-User-Id", description="User ID"),
     path: str = Query(".", description="Directory to list (virtual or absolute)."),
-    include_system: bool = Query(False, description="Include system directories (code/, tools/, mcp_servers/, skills/)."),
-    pattern: str = Query("**/*", description="Glob pattern (evaluated in the sandbox)."),
+    include_system: bool = Query(
+        False,
+        description="Include system directories (code/, tools/, mcp_servers/, skills/).",
+    ),
+    pattern: str = Query(
+        "**/*", description="Glob pattern (evaluated in the sandbox)."
+    ),
+    wait_for_sandbox: bool = Query(
+        False,
+        description="If True, wait for sandbox to be ready. If False, return empty list if not ready.",
+    ),
 ) -> dict[str, Any]:
     """List files in a workspace's live sandbox."""
 
@@ -174,10 +185,17 @@ async def list_workspace_files(
     if sandbox is None:
         raise HTTPException(status_code=503, detail="Sandbox not available")
 
+    # Fast path: return empty list if sandbox is still initializing and wait_for_sandbox=False
+    # This allows CLI autocomplete to populate later without blocking startup
+    if not wait_for_sandbox and not sandbox.is_ready():
+        return {"files": [], "sandbox_ready": False}
+
     # aglob_files returns absolute sandbox paths.
     # Allow explicit listing of hidden internal paths (e.g. /view _internal/...).
     allow_denied = _requested_hidden_ok(path)
-    absolute_paths: list[str] = await sandbox.aglob_files(pattern, path=path, allow_denied=allow_denied)
+    absolute_paths: list[str] = await sandbox.aglob_files(
+        pattern, path=path, allow_denied=allow_denied
+    )
 
     allow_hidden = _requested_hidden_ok(path)
 
@@ -194,12 +212,16 @@ async def list_workspace_files(
             continue
 
         # Hide system directories unless explicitly requested or include_system=True.
-        if not include_system and _is_system_path(client_path) and not _requested_system_ok(path):
+        if (
+            not include_system
+            and _is_system_path(client_path)
+            and not _requested_system_ok(path)
+        ):
             continue
 
         files.append(client_path)
 
-    return {"workspace_id": workspace_id, "path": path, "files": files}
+    return {"workspace_id": workspace_id, "path": path, "files": files, "sandbox_ready": True}
 
 
 @router.get("/{workspace_id}/files/read")
@@ -207,7 +229,12 @@ async def read_workspace_file(
     workspace_id: str,
     path: str = Query(..., description="File path (virtual or absolute)."),
     offset: int = Query(0, ge=0, description="Line offset (0-based)."),
-    limit: int = Query(DEFAULT_READ_LIMIT_LINES, ge=1, le=DEFAULT_READ_LIMIT_LINES, description="Max lines."),
+    limit: int = Query(
+        DEFAULT_READ_LIMIT_LINES,
+        ge=1,
+        le=DEFAULT_READ_LIMIT_LINES,
+        description="Max lines.",
+    ),
     x_user_id: str = Header(..., alias="X-User-Id", description="User ID"),
 ) -> dict[str, Any]:
     """Read a file from the workspace's live sandbox."""
@@ -312,7 +339,10 @@ async def download_workspace_file(
 async def upload_workspace_file(
     workspace_id: str,
     x_user_id: str = Header(..., alias="X-User-Id", description="User ID"),
-    path: str | None = Query(None, description="Destination path (virtual or absolute). Defaults to filename."),
+    path: str | None = Query(
+        None,
+        description="Destination path (virtual or absolute). Defaults to filename.",
+    ),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     """Upload a file to the workspace's live sandbox."""

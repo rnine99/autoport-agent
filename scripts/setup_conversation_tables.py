@@ -121,7 +121,7 @@ async def setup_query_response_tables_async():
                             sandbox_id VARCHAR(255),
 
                             -- Lifecycle state
-                            -- Values: creating, running, stopping, stopped, error, deleted
+                            -- Values: creating, running, stopping, stopped, error, deleted, flash
                             status VARCHAR(50) NOT NULL DEFAULT 'creating',
 
                             -- Timestamps

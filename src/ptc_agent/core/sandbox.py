@@ -72,7 +72,9 @@ class ExecutionResult:
 class PTCSandbox:
     """Manages Daytona sandbox for Programmatic Tool Calling (PTC) execution."""
 
-    SNAPSHOT_PYTHON_VERSION = "3.12"  # Intentionally pinned for stability/compatibility.
+    SNAPSHOT_PYTHON_VERSION = (
+        "3.12"  # Intentionally pinned for stability/compatibility.
+    )
 
     # Default Python dependencies installed in sandbox
     DEFAULT_DEPENDENCIES = [
@@ -93,7 +95,9 @@ class PTCSandbox:
         "tqdm", "tabulate",
     ]
 
-    def __init__(self, config: CoreConfig, mcp_registry: MCPRegistry | None = None) -> None:
+    def __init__(
+        self, config: CoreConfig, mcp_registry: MCPRegistry | None = None
+    ) -> None:
         """Initialize PTC sandbox.
 
         Args:
@@ -105,8 +109,7 @@ class PTCSandbox:
 
         # Initialize Daytona with proper config
         daytona_config = DaytonaConfig(
-            api_key=config.daytona.api_key,
-            api_url=config.daytona.base_url
+            api_key=config.daytona.api_key, api_url=config.daytona.base_url
         )
         self.daytona_client = AsyncDaytona(daytona_config)
 
@@ -121,8 +124,63 @@ class PTCSandbox:
         self._tool_refresh_lock = asyncio.Lock()
         self._reconnect_inflight: asyncio.Future[None] | None = None
 
+        # Lazy initialization support
+        self._ready_event: asyncio.Event | None = None
+        self._init_task: asyncio.Task[None] | None = None
+        self._init_error: Exception | None = None
+
         logger.info("Initialized PTCSandbox")
 
+    async def _wait_ready(self) -> None:
+        """Wait for sandbox to be ready. Call at start of methods needing sandbox."""
+        if self._ready_event is None:
+            # Not using lazy init - sandbox should already be ready
+            if self.sandbox is None:
+                raise RuntimeError("Sandbox not initialized")
+            return
+
+        await self._ready_event.wait()
+
+        if self._init_error:
+            raise RuntimeError(f"Sandbox initialization failed: {self._init_error}")
+
+    def is_ready(self) -> bool:
+        """Check if sandbox is ready without blocking.
+
+        Returns:
+            True if sandbox is ready for operations, False if still initializing.
+        """
+        if self._ready_event is None:
+            # Not using lazy init - check if sandbox exists
+            return self.sandbox is not None
+
+        # Using lazy init - check if event is set and no error
+        return self._ready_event.is_set() and self._init_error is None
+
+    def start_lazy_init(self, sandbox_id: str) -> None:
+        """Start sandbox initialization in background (non-blocking).
+
+        Call this instead of reconnect() for lazy initialization.
+        Methods will automatically wait for init to complete.
+        """
+        if self._init_task is not None:
+            return  # Already started
+
+        self._ready_event = asyncio.Event()
+        self._init_task = asyncio.create_task(self._lazy_reconnect(sandbox_id))
+
+    async def _lazy_reconnect(self, sandbox_id: str) -> None:
+        """Background task for lazy reconnection."""
+        try:
+            logger.info("Starting lazy sandbox init", sandbox_id=sandbox_id)
+            await self.reconnect(sandbox_id)
+            logger.info("Lazy sandbox init complete", sandbox_id=sandbox_id)
+        except Exception as e:
+            logger.error("Lazy sandbox init failed", error=str(e))
+            self._init_error = e
+        finally:
+            if self._ready_event:
+                self._ready_event.set()
 
     def _get_mcp_packages(self) -> list[str]:
         """Extract MCP package names from enabled stdio servers.
@@ -181,8 +239,7 @@ class PTCSandbox:
         base_image = Image.debian_slim(self.SNAPSHOT_PYTHON_VERSION)
 
         image = (
-            base_image
-            .run_commands(
+            base_image.run_commands(
                 # Install system dependencies including ripgrep for fast search
                 "apt-get update",
                 "apt-get install -y curl ripgrep jq git unzip",
@@ -255,7 +312,11 @@ class PTCSandbox:
                 retry_policy=_DaytonaRetryPolicy.SAFE,
                 allow_reconnect=False,
             )
-            snapshots = snapshots_result.items if hasattr(snapshots_result, "items") else snapshots_result
+            snapshots = (
+                snapshots_result.items
+                if hasattr(snapshots_result, "items")
+                else snapshots_result
+            )
 
             # Only consider active or building snapshots as existing
             # Failed snapshots should be recreated
@@ -266,12 +327,16 @@ class PTCSandbox:
                     break
 
             if snapshot_obj:
-                state = snapshot_obj.state.value if hasattr(snapshot_obj.state, "value") else str(snapshot_obj.state)
+                state = (
+                    snapshot_obj.state.value
+                    if hasattr(snapshot_obj.state, "value")
+                    else str(snapshot_obj.state)
+                )
                 if state == "build_failed":
                     logger.warning(
                         "Found failed snapshot, will recreate",
                         snapshot_name=snapshot_name,
-                        error=snapshot_obj.error_reason
+                        error=snapshot_obj.error_reason,
                     )
                     # Delete failed snapshot
                     try:
@@ -281,11 +346,15 @@ class PTCSandbox:
                             retry_policy=_DaytonaRetryPolicy.SAFE,
                             allow_reconnect=False,
                         )
-                        logger.info("Deleted failed snapshot", snapshot_name=snapshot_name)
+                        logger.info(
+                            "Deleted failed snapshot", snapshot_name=snapshot_name
+                        )
                         # Give the deletion a moment to complete
                         await asyncio.sleep(2)
                     except OSError as del_err:
-                        logger.warning("Could not delete failed snapshot", error=str(del_err))
+                        logger.warning(
+                            "Could not delete failed snapshot", error=str(del_err)
+                        )
                     snapshot_exists = False
                 elif state in ["active", "building"]:
                     snapshot_exists = True
@@ -315,7 +384,9 @@ class PTCSandbox:
                     retry_policy=_DaytonaRetryPolicy.SAFE,
                     allow_reconnect=False,
                 )
-                logger.info("Snapshot created successfully", snapshot_name=snapshot_name)
+                logger.info(
+                    "Snapshot created successfully", snapshot_name=snapshot_name
+                )
                 return snapshot_name
             except OSError as e:
                 error_str = str(e)
@@ -323,7 +394,7 @@ class PTCSandbox:
                 if "already exists" in error_str.lower():
                     logger.info(
                         "Snapshot already exists, will use it",
-                        snapshot_name=snapshot_name
+                        snapshot_name=snapshot_name,
                     )
                     return snapshot_name
                 logger.error("Failed to create snapshot", error=error_str)
@@ -360,11 +431,13 @@ class PTCSandbox:
                     retry_policy=_DaytonaRetryPolicy.SAFE,
                     allow_reconnect=False,
                 )
-                logger.info("Sandbox created from snapshot", snapshot_name=snapshot_name)
+                logger.info(
+                    "Sandbox created from snapshot", snapshot_name=snapshot_name
+                )
             except OSError as e:
                 logger.warning(
                     "Failed to create from snapshot, falling back to default",
-                    error=str(e)
+                    error=str(e),
                 )
                 snapshot_name = None
 
@@ -395,7 +468,7 @@ class PTCSandbox:
             logger.info(
                 "Sandbox ready from snapshot",
                 sandbox_id=self.sandbox_id,
-                snapshot=snapshot_name
+                snapshot=snapshot_name,
             )
             # Ensure workspace directories exist (results, data, etc.)
             await self._setup_workspace()
@@ -435,8 +508,7 @@ class PTCSandbox:
         logger.info("Tools and MCP servers ready", sandbox_id=self.sandbox_id)
 
     async def ensure_sandbox_ready(self) -> None:
-        if not self.sandbox:
-            raise RuntimeError("Sandbox not initialized")
+        await self._wait_ready()
 
         work_dir = await self._daytona_call(
             self.sandbox.get_work_dir,
@@ -449,8 +521,7 @@ class PTCSandbox:
 
         Safe to call on an already-running sandbox (e.g., after reconnect).
         """
-        if not self.sandbox:
-            raise RuntimeError("Sandbox not initialized")
+        await self._wait_ready()
 
         async with self._tool_refresh_lock:
             await self.ensure_sandbox_ready()
@@ -467,8 +538,7 @@ class PTCSandbox:
 
     async def sync_tools(self) -> dict[str, Any]:
         """Refresh tool modules if MCP config changed."""
-        if not self.sandbox:
-            raise RuntimeError("Sandbox not initialized")
+        await self._wait_ready()
 
         async with self._tool_refresh_lock:
             await self.ensure_sandbox_ready()
@@ -534,9 +604,13 @@ class PTCSandbox:
         if state:
             state_value = state.value if hasattr(state, "value") else str(state)
             if state_value == "started":
-                logger.info("Sandbox already started, skipping start", sandbox_id=sandbox_id)
+                logger.info(
+                    "Sandbox already started, skipping start", sandbox_id=sandbox_id
+                )
             elif state_value in ("stopped", "starting"):
-                logger.info("Starting stopped sandbox", sandbox_id=sandbox_id, state=state_value)
+                logger.info(
+                    "Starting stopped sandbox", sandbox_id=sandbox_id, state=state_value
+                )
                 await self._daytona_call(
                     sandbox.start,
                     timeout=60,
@@ -551,10 +625,10 @@ class PTCSandbox:
             # No state attribute, assume we need to start
             logger.info("Starting sandbox (state unknown)", sandbox_id=sandbox_id)
             await self._daytona_call(
-                    sandbox.start,
-                    timeout=60,
-                    retry_policy=_DaytonaRetryPolicy.SAFE,
-                )
+                sandbox.start,
+                timeout=60,
+                retry_policy=_DaytonaRetryPolicy.SAFE,
+            )
 
         # Get work directory reference
         self._work_dir = await self._daytona_call(
@@ -738,7 +812,9 @@ class PTCSandbox:
             return None
         return None
 
-    async def _write_mcp_manifest(self, mcp_servers_dir: str, manifest: dict[str, Any]) -> None:
+    async def _write_mcp_manifest(
+        self, mcp_servers_dir: str, manifest: dict[str, Any]
+    ) -> None:
         manifest_path = f"{mcp_servers_dir}/.mcp_manifest.json"
         await self.awrite_file_text(manifest_path, json.dumps(manifest))
 
@@ -767,8 +843,14 @@ class PTCSandbox:
                 continue
             # Only handle Python MCP servers (uv run python ...)
             if server.transport == "stdio" and server.command == "uv":
-                if len(server.args) >= 3 and server.args[0] == "run" and server.args[1] == "python":
-                    local_path = server.args[2]  # e.g., "mcp_servers/yfinance_mcp_server.py"
+                if (
+                    len(server.args) >= 3
+                    and server.args[0] == "run"
+                    and server.args[1] == "python"
+                ):
+                    local_path = server.args[
+                        2
+                    ]  # e.g., "mcp_servers/yfinance_mcp_server.py"
 
                     # Resolve relative paths against config file directory first
                     path_obj = Path(local_path)
@@ -794,7 +876,9 @@ class PTCSandbox:
                         filename = Path(resolved_path).name
                         sandbox_path = f"{mcp_servers_dir}/{filename}"
                         expected_files.add(filename)
-                        files_to_upload.append((server.name, resolved_path, sandbox_path))
+                        files_to_upload.append(
+                            (server.name, resolved_path, sandbox_path)
+                        )
                     else:
                         searched_paths = [local_path]
                         if config_dir:
@@ -831,6 +915,7 @@ class PTCSandbox:
                 and entry.get("name") != ".mcp_manifest.json"
             ]
             if files_to_remove:
+
                 async def remove_one(path: str) -> None:
                     await self._daytona_call(
                         sandbox.process.exec,
@@ -846,7 +931,10 @@ class PTCSandbox:
                 )
 
         if files_to_upload:
-            async def upload_file(server_name: str, local_path: str, sandbox_path: str) -> None:
+
+            async def upload_file(
+                server_name: str, local_path: str, sandbox_path: str
+            ) -> None:
                 # Read file from host using aiofiles to avoid blocking
                 async with aiofiles.open(local_path) as f:
                     content = await f.read()
@@ -863,14 +951,16 @@ class PTCSandbox:
                     "Uploaded MCP server file",
                     server=server_name,
                     local_path=local_path,
-                    sandbox_path=sandbox_path
+                    sandbox_path=sandbox_path,
                 )
 
             # Upload all files in parallel
-            await asyncio.gather(*[
-                upload_file(server_name, local_path, sandbox_path)
-                for server_name, local_path, sandbox_path in files_to_upload
-            ])
+            await asyncio.gather(
+                *[
+                    upload_file(server_name, local_path, sandbox_path)
+                    for server_name, local_path, sandbox_path in files_to_upload
+                ]
+            )
 
         await self._write_mcp_manifest(mcp_servers_dir, manifest)
         return True
@@ -880,7 +970,9 @@ class PTCSandbox:
             return
 
         sandbox = self.sandbox
-        disabled = [server.name for server in self.config.mcp.servers if not server.enabled]
+        disabled = [
+            server.name for server in self.config.mcp.servers if not server.enabled
+        ]
         if not disabled:
             return
 
@@ -902,7 +994,9 @@ class PTCSandbox:
 
     SKILLS_MANIFEST_FILENAME = ".skills_manifest.json"
 
-    async def compute_skills_manifest(self, local_skill_roots: list[str]) -> dict[str, Any]:
+    async def compute_skills_manifest(
+        self, local_skill_roots: list[str]
+    ) -> dict[str, Any]:
         """Compute a cheap manifest for skills contents.
 
         Used to detect changes and avoid re-uploading skills on every startup.
@@ -936,11 +1030,16 @@ class PTCSandbox:
 
     async def _ensure_sandbox_connected(self) -> None:
         if self.sandbox_id is None:
-            raise SandboxTransientError("Sandbox disconnected and no sandbox_id is available")
+            raise SandboxTransientError(
+                "Sandbox disconnected and no sandbox_id is available"
+            )
 
         # Coalesce concurrent reconnect attempts.
         async with self._reconnect_lock:
-            if self._reconnect_inflight is not None and not self._reconnect_inflight.done():
+            if (
+                self._reconnect_inflight is not None
+                and not self._reconnect_inflight.done()
+            ):
                 await self._reconnect_inflight
                 return
 
@@ -1017,8 +1116,9 @@ class PTCSandbox:
 
         raise SandboxTransientError("Transient sandbox transport error")
 
-
-    async def _compute_skills_manifest(self, local_skill_roots: list[str]) -> dict[str, Any]:
+    async def _compute_skills_manifest(
+        self, local_skill_roots: list[str]
+    ) -> dict[str, Any]:
         def build() -> dict[str, Any]:
             files: dict[str, dict[str, int]] = {}
             seen_skill_names: set[str] = set()
@@ -1052,15 +1152,23 @@ class PTCSandbox:
 
                         rel_path = f"{skill_dir.name}/{file_path.name}"
                         stat = file_path.stat()
-                        files[rel_path] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+                        files[rel_path] = {
+                            "size": stat.st_size,
+                            "mtime_ns": stat.st_mtime_ns,
+                        }
 
-            payload = "\n".join(f"{p}:{meta['size']}:{meta['mtime_ns']}" for p, meta in sorted(files.items()))
+            payload = "\n".join(
+                f"{p}:{meta['size']}:{meta['mtime_ns']}"
+                for p, meta in sorted(files.items())
+            )
             version = hashlib.sha256(payload.encode("utf-8")).hexdigest()
             return {"version": version, "files": files}
 
         return await asyncio.to_thread(build)
 
-    async def _collect_local_skill_names(self, local_skill_roots: list[str]) -> set[str]:
+    async def _collect_local_skill_names(
+        self, local_skill_roots: list[str]
+    ) -> set[str]:
         def build() -> set[str]:
             names: set[str] = set()
             for root_str in local_skill_roots:
@@ -1077,7 +1185,9 @@ class PTCSandbox:
 
         return await asyncio.to_thread(build)
 
-    async def _prune_remote_skills(self, sandbox_base: str, local_skill_names: set[str]) -> None:
+    async def _prune_remote_skills(
+        self, sandbox_base: str, local_skill_names: set[str]
+    ) -> None:
         assert self.sandbox is not None
         sandbox = self.sandbox
         entries = await self.als_directory(sandbox_base)
@@ -1137,6 +1247,8 @@ class PTCSandbox:
         Returns:
             True if an upload occurred.
         """
+        await self._wait_ready()
+
         local_roots = [local_dir for local_dir, _ in local_skills_dirs]
         local_manifest = await self._compute_skills_manifest(local_roots)
 
@@ -1155,7 +1267,9 @@ class PTCSandbox:
 
         remote_version = remote_manifest.get("version") if remote_manifest else None
         local_version = local_manifest.get("version")
-        should_refresh = force_refresh or (not reusing_sandbox) or (remote_version != local_version)
+        should_refresh = (
+            force_refresh or (not reusing_sandbox) or (remote_version != local_version)
+        )
         if not should_refresh:
             return False
 
@@ -1268,7 +1382,9 @@ class PTCSandbox:
 
                 for file_path in await list_skill_files(skill_dir):
                     sandbox_file = f"{sandbox_skill_dir}/{file_path.name}"
-                    upload_tasks.append(asyncio.create_task(upload_one(file_path, sandbox_file)))
+                    upload_tasks.append(
+                        asyncio.create_task(upload_one(file_path, sandbox_file))
+                    )
 
         if upload_tasks:
             await asyncio.gather(*upload_tasks)
@@ -1328,16 +1444,18 @@ class PTCSandbox:
         uploads: list[tuple[bytes, str, tuple[str, dict[str, str]] | None]] = []
 
         # 1. MCP client module
-        enabled_servers = [server for server in self.config.mcp.servers if server.enabled]
-        mcp_client_code = self.tool_generator.generate_mcp_client_code(
-            enabled_servers
-        )
+        enabled_servers = [
+            server for server in self.config.mcp.servers if server.enabled
+        ]
+        mcp_client_code = self.tool_generator.generate_mcp_client_code(enabled_servers)
         mcp_client_path = f"{work_dir}/tools/mcp_client.py"
-        uploads.append((
-            mcp_client_code.encode("utf-8"),
-            mcp_client_path,
-            ("MCP client module installed", {"path": mcp_client_path})
-        ))
+        uploads.append(
+            (
+                mcp_client_code.encode("utf-8"),
+                mcp_client_path,
+                ("MCP client module installed", {"path": mcp_client_path}),
+            )
+        )
 
         # 2. Tool modules and documentation
         assert self.mcp_registry is not None
@@ -1355,31 +1473,48 @@ class PTCSandbox:
 
         for server_name, tools in tools_by_server.items():
             # Generate Python module
-            module_code = self.tool_generator.generate_tool_module(
-                server_name, tools
-            )
+            module_code = self.tool_generator.generate_tool_module(server_name, tools)
             module_path = f"{work_dir}/tools/{server_name}.py"
-            uploads.append((
-                module_code.encode("utf-8"),
-                module_path,
-                ("Tool module installed", {"server": server_name, "path": module_path, "tool_count": str(len(tools))})
-            ))
+            uploads.append(
+                (
+                    module_code.encode("utf-8"),
+                    module_path,
+                    (
+                        "Tool module installed",
+                        {
+                            "server": server_name,
+                            "path": module_path,
+                            "tool_count": str(len(tools)),
+                        },
+                    ),
+                )
+            )
 
             # Generate documentation for each tool
             for tool in tools:
                 doc = self.tool_generator.generate_tool_documentation(tool)
                 doc_path = f"{work_dir}/tools/docs/{server_name}/{tool.name}.md"
-                upload_item: tuple[bytes, str, tuple[str, dict[str, str]] | None] = (doc.encode("utf-8"), doc_path, None)
+                upload_item: tuple[bytes, str, tuple[str, dict[str, str]] | None] = (
+                    doc.encode("utf-8"),
+                    doc_path,
+                    None,
+                )
                 uploads.append(upload_item)
 
         # 3. __init__.py for tools package
         init_content = '"""Auto-generated tool modules from MCP servers."""\n'
         init_path = f"{work_dir}/tools/__init__.py"
-        init_item: tuple[bytes, str, tuple[str, dict[str, str]] | None] = (init_content.encode("utf-8"), init_path, None)
+        init_item: tuple[bytes, str, tuple[str, dict[str, str]] | None] = (
+            init_content.encode("utf-8"),
+            init_path,
+            None,
+        )
         uploads.append(init_item)
 
         # Upload all files in parallel
-        async def upload_file(content_bytes: bytes, path: str, log_info: tuple[str, dict[str, str]] | None) -> None:
+        async def upload_file(
+            content_bytes: bytes, path: str, log_info: tuple[str, dict[str, str]] | None
+        ) -> None:
             assert self.sandbox is not None
             await self._daytona_call(
                 self.sandbox.fs.upload_file,
@@ -1391,10 +1526,12 @@ class PTCSandbox:
                 msg, kwargs = log_info
                 logger.info(msg, **kwargs)
 
-        await asyncio.gather(*[
-            upload_file(content, path, log_info)
-            for content, path, log_info in uploads
-        ])
+        await asyncio.gather(
+            *[
+                upload_file(content, path, log_info)
+                for content, path, log_info in uploads
+            ]
+        )
 
         logger.info("Tool modules installation complete")
 
@@ -1411,7 +1548,7 @@ class PTCSandbox:
             if server.transport != "stdio":
                 logger.warning(
                     f"Skipping non-stdio server {server.name}",
-                    transport=server.transport
+                    transport=server.transport,
                 )
                 continue
 
@@ -1440,7 +1577,7 @@ class PTCSandbox:
                     "Creating MCP server session",
                     server=server.name,
                     session=session_name,
-                    command=cmd
+                    command=cmd,
                 )
 
                 # Create session (but don't start the server yet, we'll do that when needed)
@@ -1449,25 +1586,25 @@ class PTCSandbox:
                     "session_name": session_name,
                     "command": cmd,
                     "env": env_vars,
-                    "started": False
+                    "started": False,
                 }
 
                 logger.info(
                     "MCP server session configured",
                     server=server.name,
-                    session=session_name
+                    session=session_name,
                 )
 
             except OSError as e:
                 logger.error(
                     "Failed to configure MCP server session",
                     server=server.name,
-                    error=str(e)
+                    error=str(e),
                 )
 
         logger.info(
             "Internal MCP server configuration complete",
-            servers=list(self.mcp_server_sessions.keys())
+            servers=list(self.mcp_server_sessions.keys()),
         )
 
     def _detect_missing_imports(self, stderr: str) -> list[str]:
@@ -1480,6 +1617,7 @@ class PTCSandbox:
             List of missing package names (base package only, e.g., 'foo' from 'foo.bar')
         """
         import re
+
         patterns = [
             r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]",
             r"ImportError: No module named ['\"]([^'\"]+)['\"]",
@@ -1522,14 +1660,21 @@ class PTCSandbox:
             if exit_code == 0:
                 logger.info(f"Successfully installed package: {package}")
                 return True
-            logger.warning(f"Failed to install package: {package}, exit_code={exit_code}")
+            logger.warning(
+                f"Failed to install package: {package}, exit_code={exit_code}"
+            )
             return False
         except OSError as e:
             logger.warning(f"Failed to install {package}: {e}")
             return False
 
     async def execute(
-        self, code: str, timeout: int | None = None, *, auto_install: bool = True, max_retries: int = 2
+        self,
+        code: str,
+        timeout: int | None = None,
+        *,
+        auto_install: bool = True,
+        max_retries: int = 2,
     ) -> ExecutionResult:
         """Execute Python code in the sandbox with optional auto-install for missing dependencies.
 
@@ -1542,8 +1687,7 @@ class PTCSandbox:
         Returns:
             ExecutionResult with execution details
         """
-        if not self.sandbox:
-            raise RuntimeError("Sandbox not initialized. Call setup() first.")
+        await self._wait_ready()
 
         self.execution_count += 1
         execution_id = f"exec_{self.execution_count:04d}"
@@ -1587,6 +1731,7 @@ class PTCSandbox:
 
             # Add environment variables from MCP server configs (only enabled servers)
             import os
+
             for server in self.config.mcp.servers:
                 if not server.enabled:
                     continue
@@ -1633,19 +1778,32 @@ class PTCSandbox:
             exit_code = getattr(result, "exit_code", 1)
 
             # Determine success based on exit code
-            success = (exit_code == 0)
+            success = exit_code == 0
 
             # Extract charts from artifacts (matplotlib captures)
             charts = []
-            if hasattr(result, "artifacts") and result.artifacts and hasattr(result.artifacts, "charts") and result.artifacts.charts:
+            if (
+                hasattr(result, "artifacts")
+                and result.artifacts
+                and hasattr(result.artifacts, "charts")
+                and result.artifacts.charts
+            ):
                 for chart in result.artifacts.charts:
-                    chart_type = chart.type.value if hasattr(chart.type, "value") else str(chart.type)
-                    charts.append(ChartData(
-                        type=chart_type,
-                        title=chart.title if hasattr(chart, "title") else "",
-                        png_base64=chart.png if hasattr(chart, "png") else None,
-                        elements=chart.elements if hasattr(chart, "elements") else []
-                    ))
+                    chart_type = (
+                        chart.type.value
+                        if hasattr(chart.type, "value")
+                        else str(chart.type)
+                    )
+                    charts.append(
+                        ChartData(
+                            type=chart_type,
+                            title=chart.title if hasattr(chart, "title") else "",
+                            png_base64=chart.png if hasattr(chart, "png") else None,
+                            elements=chart.elements
+                            if hasattr(chart, "elements")
+                            else [],
+                        )
+                    )
                 logger.info(f"Captured {len(charts)} chart(s) from artifacts")
 
             # Get files after execution
@@ -1689,7 +1847,7 @@ class PTCSandbox:
                         code=code,
                         timeout=timeout,
                         auto_install=auto_install,
-                        max_retries=max_retries - 1
+                        max_retries=max_retries - 1,
                     )
 
             logger.info(
@@ -1726,7 +1884,12 @@ class PTCSandbox:
             )
 
     async def execute_bash_command(
-        self, command: str, working_dir: str = "/home/daytona", timeout: int = 60, *, background: bool = False
+        self,
+        command: str,
+        working_dir: str = "/home/daytona",
+        timeout: int = 60,
+        *,
+        background: bool = False,
     ) -> dict[str, Any]:
         """Execute a bash command in the sandbox.
 
@@ -1739,12 +1902,15 @@ class PTCSandbox:
         Returns:
             Dictionary with success, stdout, stderr, exit_code, bash_id, command_hash
         """
+        await self._wait_ready()
+
         try:
             # Generate bash execution ID for tracking
             self.bash_execution_count += 1
             bash_id = f"bash_{self.bash_execution_count:04d}"
             command_hash = hashlib.sha256(command.encode()).hexdigest()[:16]
             from datetime import UTC, datetime
+
             timestamp = datetime.now(tz=UTC).isoformat()
 
             logger.info(
@@ -1865,7 +2031,10 @@ class PTCSandbox:
             if not file_infos:
                 return []
             # Return paths relative to workspace, not just filenames
-            return [f"results/{str(f.name) if hasattr(f, 'name') else str(f)}" for f in file_infos]
+            return [
+                f"results/{str(f.name) if hasattr(f, 'name') else str(f)}"
+                for f in file_infos
+            ]
         except (OSError, AttributeError) as e:
             logger.warning(f"Error listing result files: {e}")
             return []
@@ -1881,8 +2050,9 @@ class PTCSandbox:
         Raises:
             SandboxTransientError: If a transient sandbox transport error persists.
         """
+        await self._wait_ready()
+
         try:
-            assert self.sandbox is not None
             return await self._daytona_call(
                 self.sandbox.fs.download_file,
                 filepath,
@@ -1891,7 +2061,9 @@ class PTCSandbox:
         except SandboxTransientError:
             raise
         except Exception as e:
-            logger.debug("Failed to download file bytes", filepath=filepath, error=str(e))
+            logger.debug(
+                "Failed to download file bytes", filepath=filepath, error=str(e)
+            )
             return None
 
     async def aread_file_text(self, filepath: str) -> str | None:
@@ -1905,7 +2077,9 @@ class PTCSandbox:
         try:
             return content_bytes.decode("utf-8")
         except UnicodeDecodeError as e:
-            logger.debug("Failed to decode file as utf-8", filepath=filepath, error=str(e))
+            logger.debug(
+                "Failed to decode file as utf-8", filepath=filepath, error=str(e)
+            )
             return None
 
     async def aupload_file_bytes(self, filepath: str, content: bytes) -> bool:
@@ -1916,10 +2090,14 @@ class PTCSandbox:
         Raises:
             SandboxTransientError: If a transient sandbox transport error persists.
         """
+        await self._wait_ready()
+
         # Normalize the path to ensure it's in the correct format for Daytona SDK
         normalized_path = self.normalize_path(filepath)
-        
-        if self.config.filesystem.enable_path_validation and not self.validate_path(normalized_path):
+
+        if self.config.filesystem.enable_path_validation and not self.validate_path(
+            normalized_path
+        ):
             logger.error(f"Access denied: {filepath} is not in allowed directories")
             return False
 
@@ -1936,7 +2114,12 @@ class PTCSandbox:
         except SandboxTransientError:
             raise
         except Exception as e:
-            logger.debug("Failed to upload file bytes", filepath=filepath, normalized_path=normalized_path, error=str(e))
+            logger.debug(
+                "Failed to upload file bytes",
+                filepath=filepath,
+                normalized_path=normalized_path,
+                error=str(e),
+            )
             return False
 
     async def awrite_file_text(self, filepath: str, content: str) -> bool:
@@ -1947,10 +2130,14 @@ class PTCSandbox:
         try:
             return await self.aupload_file_bytes(filepath, content.encode("utf-8"))
         except UnicodeEncodeError as e:
-            logger.debug("Failed to encode file as utf-8", filepath=filepath, error=str(e))
+            logger.debug(
+                "Failed to encode file as utf-8", filepath=filepath, error=str(e)
+            )
             return False
 
-    async def aread_file_range(self, file_path: str, offset: int = 0, limit: int = 2000) -> str | None:
+    async def aread_file_range(
+        self, file_path: str, offset: int = 0, limit: int = 2000
+    ) -> str | None:
         """Read a specific range of lines from a UTF-8 text file.
 
         Args:
@@ -2021,7 +2208,7 @@ class PTCSandbox:
         work_dir = self.config.filesystem.working_directory
 
         if path.startswith(work_dir + "/"):
-            return path[len(work_dir):]  # Strip prefix, keep leading /
+            return path[len(work_dir) :]  # Strip prefix, keep leading /
         if path == work_dir:
             return "/"
 
@@ -2044,13 +2231,17 @@ class PTCSandbox:
 
         # Denylist takes priority over allowlist
         for denied_dir in self.config.filesystem.denied_directories:
-            if normalized_path == denied_dir or normalized_path.startswith(denied_dir + "/"):
+            if normalized_path == denied_dir or normalized_path.startswith(
+                denied_dir + "/"
+            ):
                 return False
 
         # Check against allowed directories
         for allowed_dir in self.config.filesystem.allowed_directories:
             # Exact match or path within allowed directory
-            if normalized_path == allowed_dir or normalized_path.startswith(allowed_dir + "/"):
+            if normalized_path == allowed_dir or normalized_path.startswith(
+                allowed_dir + "/"
+            ):
                 return True
 
         logger.warning(
@@ -2073,7 +2264,9 @@ class PTCSandbox:
             Tuple of (normalized_path, error_message_or_none)
         """
         normalized = self.normalize_path(path)
-        if self.config.filesystem.enable_path_validation and not self.validate_path(normalized):
+        if self.config.filesystem.enable_path_validation and not self.validate_path(
+            normalized
+        ):
             return normalized, f"Access denied: {path} is not in allowed directories"
         return normalized, None
 
@@ -2082,9 +2275,15 @@ class PTCSandbox:
 
         Returns entries as dicts with at least: name, path, is_dir.
         """
+        await self._wait_ready()
+
         try:
-            if self.config.filesystem.enable_path_validation and not self.validate_path(directory):
-                logger.error(f"Access denied: {directory} is not in allowed directories")
+            if self.config.filesystem.enable_path_validation and not self.validate_path(
+                directory
+            ):
+                logger.error(
+                    f"Access denied: {directory} is not in allowed directories"
+                )
                 return []
 
             assert self.sandbox is not None
@@ -2109,8 +2308,12 @@ class PTCSandbox:
 
     async def acreate_directory(self, dirpath: str) -> bool:
         """Create a directory in the sandbox."""
+        await self._wait_ready()
+
         try:
-            if self.config.filesystem.enable_path_validation and not self.validate_path(dirpath):
+            if self.config.filesystem.enable_path_validation and not self.validate_path(
+                dirpath
+            ):
                 logger.error(f"Access denied: {dirpath} is not in allowed directories")
                 return False
 
@@ -2137,8 +2340,12 @@ class PTCSandbox:
 
         This does not retry the logical edit itself; it only makes file I/O resilient.
         """
+        await self._wait_ready()
+
         try:
-            if self.config.filesystem.enable_path_validation and not self.validate_path(filepath):
+            if self.config.filesystem.enable_path_validation and not self.validate_path(
+                filepath
+            ):
                 return {
                     "success": False,
                     "error": f"Access denied: {filepath} is not in allowed directories",
@@ -2149,10 +2356,16 @@ class PTCSandbox:
                 return {"success": False, "error": "File not found"}
 
             if old_string == new_string:
-                return {"success": False, "error": "old_string and new_string must be different"}
+                return {
+                    "success": False,
+                    "error": "old_string and new_string must be different",
+                }
 
             if old_string not in content:
-                return {"success": False, "error": f"old_string not found in file: {filepath}"}
+                return {
+                    "success": False,
+                    "error": f"old_string not found in file: {filepath}",
+                }
 
             if not replace_all:
                 occurrences = content.count(old_string)
@@ -2162,7 +2375,11 @@ class PTCSandbox:
                         "error": "old_string found multiple times and requires more code context to uniquely identify the intended match",
                     }
 
-            updated = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+            updated = (
+                content.replace(old_string, new_string)
+                if replace_all
+                else content.replace(old_string, new_string, 1)
+            )
 
             if updated == content:
                 return {"success": False, "error": "Edit produced no changes"}
@@ -2189,12 +2406,18 @@ class PTCSandbox:
 
         normalized_path = self._normalize_search_path(path)
         for allowed_dir in self.config.filesystem.allowed_directories:
-            if normalized_path == allowed_dir or normalized_path.startswith(allowed_dir + "/"):
+            if normalized_path == allowed_dir or normalized_path.startswith(
+                allowed_dir + "/"
+            ):
                 return True
         return False
 
-    async def aglob_files(self, pattern: str, path: str = ".", *, allow_denied: bool = False) -> list[str]:
+    async def aglob_files(
+        self, pattern: str, path: str = ".", *, allow_denied: bool = False
+    ) -> list[str]:
         """Async glob; safe to retry automatically."""
+        await self._wait_ready()
+
         try:
             if self.config.filesystem.enable_path_validation:
                 is_allowed = (
@@ -2233,7 +2456,7 @@ class PTCSandbox:
             """)
 
             encoded_code = base64.b64encode(glob_code.encode()).decode()
-            cmd = f'python3 -c "import base64; exec(base64.b64decode(\'{encoded_code}\').decode())"'
+            cmd = f"python3 -c \"import base64; exec(base64.b64decode('{encoded_code}').decode())\""
 
             assert self.sandbox is not None
             result = await self._daytona_call(
@@ -2270,8 +2493,12 @@ class PTCSandbox:
         offset: int = 0,
     ) -> Any:
         """Async ripgrep; safe to retry automatically."""
+        await self._wait_ready()
+
         try:
-            if self.config.filesystem.enable_path_validation and not self.validate_path(path):
+            if self.config.filesystem.enable_path_validation and not self.validate_path(
+                path
+            ):
                 logger.error(f"Access denied: {path} is not in allowed directories")
                 return []
 

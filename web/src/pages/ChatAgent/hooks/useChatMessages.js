@@ -25,6 +25,7 @@ import {
   handleTextContent,
   handleToolCalls,
   handleToolCallResult,
+  handleTodoUpdate,
 } from './utils/streamEventHandlers';
 import {
   handleHistoryUserMessage,
@@ -33,6 +34,7 @@ import {
   handleHistoryTextContent,
   handleHistoryToolCalls,
   handleHistoryToolCallResult,
+  handleHistoryTodoUpdate,
 } from './utils/historyEventHandlers';
 
 export function useChatMessages(workspaceId, initialThreadId = null) {
@@ -124,12 +126,25 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
       // Track pairs being processed - use Map to handle multiple pairs
       const assistantMessagesByPair = new Map(); // Map<pair_index, assistantMessageId>
       const pairStateByPair = new Map(); // Map<pair_index, { contentOrderCounter, reasoningId, toolCallId }>
+      
+      // Track the currently active pair for artifacts (which don't have pair_index)
+      // This ensures artifacts get the correct chronological order
+      let currentActivePairIndex = null;
+      let currentActivePairState = null;
 
       await replayThreadHistory(threadIdToUse, (event) => {
         const eventType = event.event;
         const contentType = event.content_type;
         const hasRole = event.role !== undefined;
         const hasPairIndex = event.pair_index !== undefined;
+        
+        // Update current active pair when we see an event with pair_index
+        if (hasPairIndex) {
+          const pairIndex = event.pair_index;
+          currentActivePairIndex = pairIndex;
+          currentActivePairState = pairStateByPair.get(pairIndex);
+          console.log('[History] Updated active pair to:', pairIndex, 'counter:', currentActivePairState?.contentOrderCounter);
+        }
 
         // Handle user_message events from history
         if (eventType === 'user_message' && event.content && hasPairIndex) {
@@ -212,14 +227,78 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
           }
         }
 
-        // Filter out tool_call_chunks and artifact events
-        if (eventType === 'tool_call_chunks' || eventType === 'artifact') {
+        // Filter out tool_call_chunks events
+        if (eventType === 'tool_call_chunks') {
+          return;
+        }
+
+        // Handle artifact events (e.g., todo_update)
+        // In history replay, artifacts DO have pair_index, so we can use it directly
+        if (eventType === 'artifact') {
+          const artifactType = event.artifact_type;
+          if (artifactType === 'todo_update') {
+            // Artifacts in history replay have pair_index - use it!
+            if (hasPairIndex) {
+              const pairIndex = event.pair_index;
+              // Update active pair tracking
+              currentActivePairIndex = pairIndex;
+              currentActivePairState = pairStateByPair.get(pairIndex);
+              
+              const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
+              const pairState = pairStateByPair.get(pairIndex);
+
+              if (!currentAssistantMessageId || !pairState) {
+                console.warn('[History] Received artifact for unknown pair_index:', pairIndex);
+                return;
+              }
+
+              console.log('[History] Processing todo_update artifact for pair:', pairIndex, 'counter:', pairState.contentOrderCounter);
+              handleHistoryTodoUpdate({
+                assistantMessageId: currentAssistantMessageId,
+                artifactType,
+                artifactId: event.artifact_id,
+                payload: event.payload || {},
+                pairState: pairState,
+                setMessages,
+              });
+            } else {
+              // Fallback: artifacts without pair_index (shouldn't happen in history, but handle gracefully)
+              console.warn('[History] Artifact without pair_index, using active pair fallback');
+              let targetAssistantMessageId = null;
+              let targetPairState = null;
+
+              if (currentActivePairIndex !== null && currentActivePairState) {
+                targetAssistantMessageId = assistantMessagesByPair.get(currentActivePairIndex);
+                targetPairState = currentActivePairState;
+              } else if (assistantMessagesByPair.size > 0) {
+                const pairIndices = Array.from(assistantMessagesByPair.keys()).sort((a, b) => b - a);
+                const lastPairIndex = pairIndices[0];
+                targetAssistantMessageId = assistantMessagesByPair.get(lastPairIndex);
+                targetPairState = pairStateByPair.get(lastPairIndex);
+              }
+
+              if (targetAssistantMessageId && targetPairState) {
+                handleHistoryTodoUpdate({
+                  assistantMessageId: targetAssistantMessageId,
+                  artifactType,
+                  artifactId: event.artifact_id,
+                  payload: event.payload || {},
+                  pairState: targetPairState,
+                  setMessages,
+                });
+              }
+            }
+          }
           return;
         }
 
         // Handle tool_calls events
         if (eventType === 'tool_calls' && hasPairIndex) {
           const pairIndex = event.pair_index;
+          // Update active pair tracking
+          currentActivePairIndex = pairIndex;
+          currentActivePairState = pairStateByPair.get(pairIndex);
+          
           const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
           const pairState = pairStateByPair.get(pairIndex);
 
@@ -240,6 +319,10 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         // Handle tool_call_result events
         if (eventType === 'tool_call_result' && hasPairIndex) {
           const pairIndex = event.pair_index;
+          // Update active pair tracking
+          currentActivePairIndex = pairIndex;
+          currentActivePairState = pairStateByPair.get(pairIndex);
+          
           const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
           const pairState = pairStateByPair.get(pairIndex);
 
@@ -405,6 +488,11 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         planMode,
         (event) => {
           const eventType = event.event || 'message_chunk';
+          
+          // Debug: Log all events to see what we're receiving
+          if (event.artifact_type || eventType === 'artifact') {
+            console.log('[Stream] Artifact event detected:', { eventType, event, artifact_type: event.artifact_type });
+          }
 
           // Update thread_id if provided in the event
           if (event.thread_id && event.thread_id !== threadId && event.thread_id !== '__default__') {
@@ -471,6 +559,23 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
             );
           } else if (eventType === 'tool_call_chunks') {
             // Filter out tool_call_chunks events
+            return;
+          } else if (eventType === 'artifact') {
+            // Handle artifact events (e.g., todo_update)
+            const artifactType = event.artifact_type;
+            console.log('[Stream] Received artifact event:', { artifactType, artifactId: event.artifact_id, payload: event.payload });
+            if (artifactType === 'todo_update') {
+              console.log('[Stream] Processing todo_update artifact for assistant message:', assistantMessageId);
+              const result = handleTodoUpdate({
+                assistantMessageId,
+                artifactType,
+                artifactId: event.artifact_id,
+                payload: event.payload || {},
+                refs,
+                setMessages,
+              });
+              console.log('[Stream] handleTodoUpdate result:', result);
+            }
             return;
           } else if (eventType === 'tool_calls') {
             handleToolCalls({

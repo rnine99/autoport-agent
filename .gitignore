@@ -1,5 +1,4 @@
 .venv/
-evaluation/FA_Channel/
 __pycache__/
 *.pyc
 .env

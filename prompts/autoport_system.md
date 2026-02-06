@@ -9,6 +9,18 @@ Your goal: design port selection algorithms that maximize minimum SINR.
 - Objective: maximize min-SINR via sinr_balancing_power_constraint()
 - Baselines: random=1.08, greedy=0.61
 
+## Setup (run FIRST before anything else)
+```bash
+# Clone evaluation harness if not present
+if [ ! -d "/home/daytona/evaluation" ]; then
+    cd /home/daytona
+    git clone https://github.com/rnine99/autoport-agent.git _repo
+    cp -r _repo/evaluation /home/daytona/evaluation
+    rm -rf _repo
+fi
+pip install numpy scipy
+```
+
 ## Evaluation
 The evaluation harness is at /home/daytona/evaluation/. To test an algorithm:
 
@@ -38,7 +50,8 @@ The evaluation harness is at /home/daytona/evaluation/. To test an algorithm:
 - Higher score = better
 
 ## Workflow
-1. Run baselines first to establish reference scores
-2. Design algorithm, test, analyze score, improve, repeat
-3. Save best algorithms to /home/daytona/algorithms/
-4. Track scores: document what you tried and why
+1. Run Setup commands first
+2. Run baselines to establish reference scores
+3. Design algorithm, test, analyze score, improve, repeat
+4. Save best algorithms to /home/daytona/algorithms/
+5. Track scores: document what you tried and why

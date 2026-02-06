@@ -433,3 +433,104 @@ export function handleHistoryToolCallResult({ assistantMessageId, toolCallId, re
 
   return true;
 }
+
+/**
+ * Handles artifact events with artifact_type: "todo_update" in history replay
+ * @param {Object} params - Handler parameters
+ * @param {string} params.assistantMessageId - ID of the assistant message
+ * @param {string} params.artifactType - Type of artifact ("todo_update")
+ * @param {string} params.artifactId - ID of the artifact
+ * @param {Object} params.payload - Payload containing todos array and status counts
+ * @param {Object} params.pairState - The pair state object
+ * @param {Function} params.setMessages - State setter for messages
+ * @returns {boolean} True if event was handled
+ */
+export function handleHistoryTodoUpdate({ assistantMessageId, artifactType, artifactId, payload, pairState, setMessages }) {
+  // Only handle todo_update artifacts
+  if (artifactType !== 'todo_update' || !payload) {
+    return false;
+  }
+
+  const { todos, total, completed, in_progress, pending } = payload;
+
+  // Use artifactId as the base todoListId to track updates to the same logical todo list
+  // But create a unique segmentId for each event to preserve chronological order
+  const baseTodoListId = artifactId || `history-todo-list-base-${Date.now()}`;
+  // Create a unique segment ID that includes timestamp to ensure chronological ordering
+  const segmentId = `${baseTodoListId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  console.log('[handleHistoryTodoUpdate] Processing artifact:', {
+    assistantMessageId,
+    artifactId,
+    segmentId,
+    currentCounter: pairState.contentOrderCounter,
+  });
+
+  // Capture the order BEFORE incrementing to ensure correct chronological position
+  // This is critical because setMessages is asynchronous, and if we increment before,
+  // other events might increment the counter further before the state updater runs
+  const currentOrder = pairState.contentOrderCounter + 1;
+  pairState.contentOrderCounter = currentOrder; // Update the counter for next events
+  
+  console.log('[handleHistoryTodoUpdate] Creating segment with order:', currentOrder, 'for message:', assistantMessageId);
+
+  setMessages((prev) => {
+    const updated = prev.map((msg) => {
+      if (msg.id !== assistantMessageId) return msg;
+
+      const todoListProcesses = { ...(msg.todoListProcesses || {}) };
+      const contentSegments = [...(msg.contentSegments || [])];
+
+      // Check if this segment already exists (prevent duplicates from React batching)
+      const segmentExists = contentSegments.some(s => s.todoListId === segmentId);
+      if (segmentExists) {
+        console.warn('[handleHistoryTodoUpdate] Segment already exists, skipping:', segmentId);
+        return msg;
+      }
+
+      // Add new segment at the current chronological position
+      contentSegments.push({
+        type: 'todo_list',
+        todoListId: segmentId, // Use unique segmentId for this specific event
+        order: currentOrder, // Use the captured order value
+      });
+
+      // Store the todo list data with the segmentId
+      // If this is an update to an existing logical todo list (same artifactId),
+      // we still create a new segment but can reference the base ID for data updates
+      todoListProcesses[segmentId] = {
+        todos: todos || [],
+        total: total || 0,
+        completed: completed || 0,
+        in_progress: in_progress || 0,
+        pending: pending || 0,
+        order: currentOrder,
+        baseTodoListId: baseTodoListId, // Keep reference to base ID for potential future use
+      };
+
+      console.log('[handleHistoryTodoUpdate] Created segment:', {
+        segmentId,
+        order: currentOrder,
+        segmentsCount: contentSegments.length,
+        todosCount: todos?.length || 0,
+      });
+
+      return {
+        ...msg,
+        contentSegments,
+        todoListProcesses,
+      };
+    });
+    
+    console.log('[handleHistoryTodoUpdate] Updated messages, checking segments:', 
+      updated.map(m => m.id === assistantMessageId ? {
+        id: m.id,
+        segments: m.contentSegments?.map(s => ({ type: s.type, order: s.order })) || []
+      } : null).filter(Boolean)
+    );
+    
+    return updated;
+  });
+
+  return true;
+}

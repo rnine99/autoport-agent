@@ -3,6 +3,7 @@ import { Bot, User, Loader2 } from 'lucide-react';
 import TextMessageContent from './TextMessageContent';
 import ReasoningMessageContent from './ReasoningMessageContent';
 import ToolCallMessageContent from './ToolCallMessageContent';
+import TodoListMessageContent from './TodoListMessageContent';
 
 /**
  * MessageList Component
@@ -83,6 +84,7 @@ function MessageBubble({ message }) {
             segments={message.contentSegments}
             reasoningProcesses={message.reasoningProcesses || {}}
             toolCallProcesses={message.toolCallProcesses || {}}
+            todoListProcesses={message.todoListProcesses || {}}
             isStreaming={message.isStreaming}
             hasError={message.error}
           />
@@ -133,18 +135,25 @@ function MessageBubble({ message }) {
  * MessageContentSegments Component
  * 
  * Renders content segments in chronological order.
- * Handles interleaving of text, reasoning, and tool call content based on when they occurred.
+ * Handles interleaving of text, reasoning, tool call, and todo list content based on when they occurred.
  * 
  * @param {Object} props
  * @param {Array} props.segments - Array of content segments sorted by order
  * @param {Object} props.reasoningProcesses - Object mapping reasoningId to reasoning process data
  * @param {Object} props.toolCallProcesses - Object mapping toolCallId to tool call process data
+ * @param {Object} props.todoListProcesses - Object mapping todoListId to todo list process data
  * @param {boolean} props.isStreaming - Whether the message is currently streaming
  * @param {boolean} props.hasError - Whether the message has an error
  */
-function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, isStreaming, hasError }) {
+function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses, isStreaming, hasError }) {
   // Sort segments by order to ensure chronological rendering
   const sortedSegments = [...segments].sort((a, b) => a.order - b.order);
+  console.log('[MessageContentSegments] Rendering segments:', {
+    totalSegments: sortedSegments.length,
+    segmentTypes: sortedSegments.map(s => s.type),
+    segmentOrders: sortedSegments.map(s => ({ type: s.type, order: s.order })),
+    todoListProcessesKeys: Object.keys(todoListProcesses || {}),
+  });
   
   // Group consecutive text segments together for better rendering
   // Text segments are grouped only if they appear consecutively (no reasoning in between)
@@ -176,6 +185,11 @@ function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesse
       // Finalize current text group if exists (tool call breaks text continuity)
       currentTextGroup = null;
       // Add tool call segment
+      groupedSegments.push(segment);
+    } else if (segment.type === 'todo_list') {
+      // Finalize current text group if exists (todo list breaks text continuity)
+      currentTextGroup = null;
+      // Add todo list segment
       groupedSegments.push(segment);
     }
   }
@@ -227,6 +241,25 @@ function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesse
               />
             );
           }
+          return null;
+        } else if (segment.type === 'todo_list') {
+          // Render todo list
+          console.log('[MessageList] Rendering todo_list segment:', { todoListId: segment.todoListId, todoListProcesses });
+          const todoListProcess = todoListProcesses[segment.todoListId];
+          console.log('[MessageList] Found todoListProcess:', todoListProcess);
+          if (todoListProcess) {
+            return (
+              <TodoListMessageContent
+                key={`todo-list-${segment.todoListId}`}
+                todos={todoListProcess.todos || []}
+                total={todoListProcess.total || 0}
+                completed={todoListProcess.completed || 0}
+                in_progress={todoListProcess.in_progress || 0}
+                pending={todoListProcess.pending || 0}
+              />
+            );
+          }
+          console.warn('[MessageList] No todoListProcess found for todoListId:', segment.todoListId);
           return null;
         }
         return null;

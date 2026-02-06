@@ -35,6 +35,7 @@ export function createAssistantMessage(messageId = null) {
     contentSegments: [],
     reasoningProcesses: {},
     toolCallProcesses: {},
+    todoListProcesses: {},
   };
 }
 
@@ -74,6 +75,7 @@ export function createHistoryAssistantMessage(pairIndex, timestamp = null) {
     contentSegments: [],
     reasoningProcesses: {},
     toolCallProcesses: {},
+    todoListProcesses: {},
   };
 }
 

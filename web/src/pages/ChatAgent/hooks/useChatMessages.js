@@ -25,6 +25,7 @@ import {
   handleTextContent,
   handleToolCalls,
   handleToolCallResult,
+  handleTodoUpdate,
 } from './utils/streamEventHandlers';
 import {
   handleHistoryUserMessage,
@@ -33,9 +34,10 @@ import {
   handleHistoryTextContent,
   handleHistoryToolCalls,
   handleHistoryToolCallResult,
+  handleHistoryTodoUpdate,
 } from './utils/historyEventHandlers';
 
-export function useChatMessages(workspaceId, initialThreadId = null) {
+export function useChatMessages(workspaceId, initialThreadId = null, updateTodoListCard = null) {
   // State
   const [messages, setMessages] = useState([]);
   const [threadId, setThreadId] = useState(() => {
@@ -59,6 +61,12 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
   const historyLoadingRef = useRef(false);
   const historyMessagesRef = useRef(new Set()); // Track message IDs from history
   const newMessagesStartIndexRef = useRef(0); // Index where new messages start
+
+  // Track if streaming is in progress to prevent history loading during streaming
+  const isStreamingRef = useRef(false);
+
+  // Track if this is a new conversation (for todo list card management)
+  const isNewConversationRef = useRef(false);
 
   // Recently sent messages tracker
   const recentlySentTrackerRef = useRef(createRecentlySentTracker());
@@ -124,12 +132,26 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
       // Track pairs being processed - use Map to handle multiple pairs
       const assistantMessagesByPair = new Map(); // Map<pair_index, assistantMessageId>
       const pairStateByPair = new Map(); // Map<pair_index, { contentOrderCounter, reasoningId, toolCallId }>
+      
+      // Track the currently active pair for artifacts (which don't have pair_index)
+      // This ensures artifacts get the correct chronological order
+      let currentActivePairIndex = null;
+      let currentActivePairState = null;
 
-      await replayThreadHistory(threadIdToUse, (event) => {
+      try {
+        await replayThreadHistory(threadIdToUse, (event) => {
         const eventType = event.event;
         const contentType = event.content_type;
         const hasRole = event.role !== undefined;
         const hasPairIndex = event.pair_index !== undefined;
+        
+        // Update current active pair when we see an event with pair_index
+        if (hasPairIndex) {
+          const pairIndex = event.pair_index;
+          currentActivePairIndex = pairIndex;
+          currentActivePairState = pairStateByPair.get(pairIndex);
+          console.log('[History] Updated active pair to:', pairIndex, 'counter:', currentActivePairState?.contentOrderCounter);
+        }
 
         // Handle user_message events from history
         if (eventType === 'user_message' && event.content && hasPairIndex) {
@@ -212,14 +234,78 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
           }
         }
 
-        // Filter out tool_call_chunks and artifact events
-        if (eventType === 'tool_call_chunks' || eventType === 'artifact') {
+        // Filter out tool_call_chunks events
+        if (eventType === 'tool_call_chunks') {
+          return;
+        }
+
+        // Handle artifact events (e.g., todo_update)
+        // In history replay, artifacts DO have pair_index, so we can use it directly
+        if (eventType === 'artifact') {
+          const artifactType = event.artifact_type;
+          if (artifactType === 'todo_update') {
+            // Artifacts in history replay have pair_index - use it!
+            if (hasPairIndex) {
+              const pairIndex = event.pair_index;
+              // Update active pair tracking
+              currentActivePairIndex = pairIndex;
+              currentActivePairState = pairStateByPair.get(pairIndex);
+              
+              const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
+              const pairState = pairStateByPair.get(pairIndex);
+
+              if (!currentAssistantMessageId || !pairState) {
+                console.warn('[History] Received artifact for unknown pair_index:', pairIndex);
+                return;
+              }
+
+              console.log('[History] Processing todo_update artifact for pair:', pairIndex, 'counter:', pairState.contentOrderCounter);
+              handleHistoryTodoUpdate({
+                assistantMessageId: currentAssistantMessageId,
+                artifactType,
+                artifactId: event.artifact_id,
+                payload: event.payload || {},
+                pairState: pairState,
+                setMessages,
+              });
+            } else {
+              // Fallback: artifacts without pair_index (shouldn't happen in history, but handle gracefully)
+              console.warn('[History] Artifact without pair_index, using active pair fallback');
+              let targetAssistantMessageId = null;
+              let targetPairState = null;
+
+              if (currentActivePairIndex !== null && currentActivePairState) {
+                targetAssistantMessageId = assistantMessagesByPair.get(currentActivePairIndex);
+                targetPairState = currentActivePairState;
+              } else if (assistantMessagesByPair.size > 0) {
+                const pairIndices = Array.from(assistantMessagesByPair.keys()).sort((a, b) => b - a);
+                const lastPairIndex = pairIndices[0];
+                targetAssistantMessageId = assistantMessagesByPair.get(lastPairIndex);
+                targetPairState = pairStateByPair.get(lastPairIndex);
+              }
+
+              if (targetAssistantMessageId && targetPairState) {
+                handleHistoryTodoUpdate({
+                  assistantMessageId: targetAssistantMessageId,
+                  artifactType,
+                  artifactId: event.artifact_id,
+                  payload: event.payload || {},
+                  pairState: targetPairState,
+                  setMessages,
+                });
+              }
+            }
+          }
           return;
         }
 
         // Handle tool_calls events
         if (eventType === 'tool_calls' && hasPairIndex) {
           const pairIndex = event.pair_index;
+          // Update active pair tracking
+          currentActivePairIndex = pairIndex;
+          currentActivePairState = pairStateByPair.get(pairIndex);
+          
           const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
           const pairState = pairStateByPair.get(pairIndex);
 
@@ -240,6 +326,10 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         // Handle tool_call_result events
         if (eventType === 'tool_call_result' && hasPairIndex) {
           const pairIndex = event.pair_index;
+          // Update active pair tracking
+          currentActivePairIndex = pairIndex;
+          currentActivePairState = pairStateByPair.get(pairIndex);
+          
           const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
           const pairState = pairStateByPair.get(pairIndex);
 
@@ -293,12 +383,24 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         }
       });
 
-      console.log('[History] Replay completed');
+        console.log('[History] Replay completed');
+      } catch (replayError) {
+        // Handle 404 gracefully - it's expected for brand new threads that haven't been fully initialized yet
+        if (replayError.message && replayError.message.includes('404')) {
+          console.log('[History] Thread not found (404) - this is normal for new threads, skipping history load');
+          // Don't set error message for 404 - it's expected for new threads
+        } else {
+          throw replayError; // Re-throw other errors
+        }
+      }
       setIsLoadingHistory(false);
       historyLoadingRef.current = false;
     } catch (error) {
       console.error('[History] Error loading conversation history:', error);
-      setMessageError(error.message || 'Failed to load conversation history');
+      // Only show error if it's not a 404 (404 is expected for new threads)
+      if (!error.message || !error.message.includes('404')) {
+        setMessageError(error.message || 'Failed to load conversation history');
+      }
       setIsLoadingHistory(false);
       historyLoadingRef.current = false;
     }
@@ -306,18 +408,22 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
 
   // Load history when workspace or threadId changes
   useEffect(() => {
-    console.log('[History] useEffect triggered, workspaceId:', workspaceId, 'threadId:', threadId);
+    console.log('[History] useEffect triggered, workspaceId:', workspaceId, 'threadId:', threadId, 'isStreaming:', isStreamingRef.current);
 
     // Guard: Only load if we have a workspaceId and a valid threadId (not '__default__')
-    if (!workspaceId || !threadId || threadId === '__default__' || historyLoadingRef.current) {
+    // Also skip if streaming is in progress (prevents race condition when thread ID changes during streaming)
+    if (!workspaceId || !threadId || threadId === '__default__' || historyLoadingRef.current || isStreamingRef.current) {
       console.log('[History] Skipping load:', {
         workspaceId,
         threadId,
         isLoading: historyLoadingRef.current,
+        isStreaming: isStreamingRef.current,
         reason: !workspaceId ? 'no workspaceId' :
           !threadId ? 'no threadId' :
             threadId === '__default__' ? 'default thread' :
-              'already loading'
+              historyLoadingRef.current ? 'already loading' :
+                isStreamingRef.current ? 'streaming in progress' :
+                  'unknown'
       });
       return;
     }
@@ -350,6 +456,16 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
     const userMessage = createUserMessage(message);
     recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
 
+    // Check if this is a new conversation
+    // Only consider it a new conversation if:
+    // 1. There are no messages at all, OR
+    // 2. We're starting a new thread (threadId is '__default__')
+    // This determines if we should overwrite the existing todo list card
+    // Note: We don't consider it a new conversation just because all messages are from history
+    // - the user might continue the conversation, and we want to keep the todo list card
+    const isNewConversation = messages.length === 0 || threadId === '__default__';
+    isNewConversationRef.current = isNewConversation;
+
     // Add user message after history messages
     setMessages((prev) => {
       const newMessages = appendMessage(prev, userMessage);
@@ -362,6 +478,9 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
 
     setIsLoading(true);
     setMessageError(null);
+    
+    // Mark streaming as in progress to prevent history loading during streaming
+    isStreamingRef.current = true;
 
     // Create assistant message placeholder
     const assistantMessageId = `assistant-${Date.now()}`;
@@ -395,6 +514,8 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         contentOrderCounterRef,
         currentReasoningIdRef,
         currentToolCallIdRef,
+        updateTodoListCard,
+        isNewConversation: isNewConversationRef.current,
       };
 
       await sendChatMessageStream(
@@ -405,8 +526,15 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         planMode,
         (event) => {
           const eventType = event.event || 'message_chunk';
+          
+          // Debug: Log all events to see what we're receiving
+          if (event.artifact_type || eventType === 'artifact') {
+            console.log('[Stream] Artifact event detected:', { eventType, event, artifact_type: event.artifact_type });
+          }
 
           // Update thread_id if provided in the event
+          // Note: We don't trigger history loading here because isStreamingRef is still true
+          // History will be loaded after streaming completes (in the finally block)
           if (event.thread_id && event.thread_id !== threadId && event.thread_id !== '__default__') {
             setThreadId(event.thread_id);
             setStoredThreadId(workspaceId, event.thread_id);
@@ -472,6 +600,23 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
           } else if (eventType === 'tool_call_chunks') {
             // Filter out tool_call_chunks events
             return;
+          } else if (eventType === 'artifact') {
+            // Handle artifact events (e.g., todo_update)
+            const artifactType = event.artifact_type;
+            console.log('[Stream] Received artifact event:', { artifactType, artifactId: event.artifact_id, payload: event.payload });
+            if (artifactType === 'todo_update') {
+              console.log('[Stream] Processing todo_update artifact for assistant message:', assistantMessageId);
+              const result = handleTodoUpdate({
+                assistantMessageId,
+                artifactType,
+                artifactId: event.artifact_id,
+                payload: event.payload || {},
+                refs,
+                setMessages,
+              });
+              console.log('[Stream] handleTodoUpdate result:', result);
+            }
+            return;
           } else if (eventType === 'tool_calls') {
             handleToolCalls({
               assistantMessageId,
@@ -506,21 +651,23 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         }))
       );
     } catch (err) {
-      console.error('Error sending message:', err);
-      setMessageError(err.message || 'Failed to send message');
-      setMessages((prev) =>
-        updateMessage(prev, assistantMessageId, (msg) => ({
-          ...msg,
-          content: msg.content || 'Failed to send message. Please try again.',
-          isStreaming: false,
-          error: true,
-        }))
-      );
-    } finally {
-      setIsLoading(false);
-      currentMessageRef.current = null;
-    }
-  };
+          console.error('Error sending message:', err);
+          setMessageError(err.message || 'Failed to send message');
+          setMessages((prev) =>
+            updateMessage(prev, assistantMessageId, (msg) => ({
+              ...msg,
+              content: msg.content || 'Failed to send message. Please try again.',
+              isStreaming: false,
+              error: true,
+            }))
+          );
+        } finally {
+          setIsLoading(false);
+          currentMessageRef.current = null;
+          // Mark streaming as complete - this will allow history loading to proceed if thread ID changed
+          isStreamingRef.current = false;
+        }
+      };
 
   return {
     messages,

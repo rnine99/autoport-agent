@@ -368,3 +368,108 @@ export function handleToolCallResult({ assistantMessageId, toolCallId, result, r
 
   return true;
 }
+
+/**
+ * Handles artifact events with artifact_type: "todo_update" during streaming
+ * @param {Object} params - Handler parameters
+ * @param {string} params.assistantMessageId - ID of the assistant message being updated
+ * @param {string} params.artifactType - Type of artifact ("todo_update")
+ * @param {string} params.artifactId - ID of the artifact
+ * @param {Object} params.payload - Payload containing todos array and status counts
+ * @param {Object} params.refs - Refs object with contentOrderCounterRef
+ * @param {Function} params.setMessages - State setter for messages
+ * @returns {boolean} True if event was handled
+ */
+export function handleTodoUpdate({ assistantMessageId, artifactType, artifactId, payload, refs, setMessages }) {
+  const { contentOrderCounterRef, updateTodoListCard, isNewConversation } = refs;
+
+  console.log('[handleTodoUpdate] Called with:', { assistantMessageId, artifactType, artifactId, payload, isNewConversation });
+
+  // Only handle todo_update artifacts
+  if (artifactType !== 'todo_update' || !payload) {
+    console.log('[handleTodoUpdate] Skipping - artifactType:', artifactType, 'hasPayload:', !!payload);
+    return false;
+  }
+
+  const { todos, total, completed, in_progress, pending } = payload;
+  console.log('[handleTodoUpdate] Extracted data:', { todos, total, completed, in_progress, pending });
+
+  // Update floating card with todo list data (only during live streaming, not history)
+  // Do this before setMessages to ensure we have the latest data
+  // Always update the card if updateTodoListCard is available, even if todos array is empty
+  // This ensures the card persists and shows the latest state
+  if (updateTodoListCard) {
+    console.log('[handleTodoUpdate] Updating todo list card, isNewConversation:', isNewConversation, 'todos count:', todos?.length || 0);
+    updateTodoListCard(
+      {
+        todos: todos || [],
+        total: total || 0,
+        completed: completed || 0,
+        in_progress: in_progress || 0,
+        pending: pending || 0,
+      },
+      isNewConversation || false
+    );
+  }
+
+  // Use artifactId as the base todoListId to track updates to the same logical todo list
+  // But create a unique segmentId for each event to preserve chronological order
+  const baseTodoListId = artifactId || `todo-list-base-${Date.now()}`;
+  // Create a unique segment ID that includes timestamp to ensure chronological ordering
+  const segmentId = `${baseTodoListId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  console.log('[handleTodoUpdate] Using baseTodoListId:', baseTodoListId, 'segmentId:', segmentId);
+
+  setMessages((prev) => {
+    console.log('[handleTodoUpdate] Current messages:', prev.map(m => ({ id: m.id, role: m.role, hasSegments: !!m.contentSegments, hasTodoProcesses: !!m.todoListProcesses })));
+    const updated = prev.map((msg) => {
+      if (msg.id !== assistantMessageId) return msg;
+
+      console.log('[handleTodoUpdate] Found matching message:', msg.id);
+      const todoListProcesses = { ...(msg.todoListProcesses || {}) };
+      const contentSegments = [...(msg.contentSegments || [])];
+
+      // Always create a new segment for each todo_update event to preserve chronological order
+      // Increment order counter to get the current position in the stream
+      contentOrderCounterRef.current++;
+      const currentOrder = contentOrderCounterRef.current;
+      console.log('[handleTodoUpdate] Creating new todo list segment with order:', currentOrder, 'segmentId:', segmentId);
+
+      // Add new segment at the current chronological position
+      contentSegments.push({
+        type: 'todo_list',
+        todoListId: segmentId, // Use unique segmentId for this specific event
+        order: currentOrder,
+      });
+
+      // Store the todo list data with the segmentId
+      // If this is an update to an existing logical todo list (same artifactId),
+      // we still create a new segment but can reference the base ID for data updates
+      todoListProcesses[segmentId] = {
+        todos: todos || [],
+        total: total || 0,
+        completed: completed || 0,
+        in_progress: in_progress || 0,
+        pending: pending || 0,
+        order: currentOrder,
+        baseTodoListId: baseTodoListId, // Keep reference to base ID for potential future use
+      };
+      console.log('[handleTodoUpdate] Created new todo list process:', todoListProcesses[segmentId]);
+
+      const updatedMsg = {
+        ...msg,
+        contentSegments,
+        todoListProcesses,
+      };
+      console.log('[handleTodoUpdate] Updated message:', { 
+        id: updatedMsg.id, 
+        segmentsCount: updatedMsg.contentSegments?.length,
+        todoListIds: Object.keys(updatedMsg.todoListProcesses || {})
+      });
+      return updatedMsg;
+    });
+    console.log('[handleTodoUpdate] Final messages after update:', updated.map(m => ({ id: m.id, segmentsCount: m.contentSegments?.length, todoListIds: Object.keys(m.todoListProcesses || {}) })));
+    return updated;
+  });
+
+  return true;
+}

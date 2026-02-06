@@ -62,6 +62,9 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
   const historyMessagesRef = useRef(new Set()); // Track message IDs from history
   const newMessagesStartIndexRef = useRef(0); // Index where new messages start
 
+  // Track if streaming is in progress to prevent history loading during streaming
+  const isStreamingRef = useRef(false);
+
   // Recently sent messages tracker
   const recentlySentTrackerRef = useRef(createRecentlySentTracker());
 
@@ -132,7 +135,8 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
       let currentActivePairIndex = null;
       let currentActivePairState = null;
 
-      await replayThreadHistory(threadIdToUse, (event) => {
+      try {
+        await replayThreadHistory(threadIdToUse, (event) => {
         const eventType = event.event;
         const contentType = event.content_type;
         const hasRole = event.role !== undefined;
@@ -376,12 +380,24 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         }
       });
 
-      console.log('[History] Replay completed');
+        console.log('[History] Replay completed');
+      } catch (replayError) {
+        // Handle 404 gracefully - it's expected for brand new threads that haven't been fully initialized yet
+        if (replayError.message && replayError.message.includes('404')) {
+          console.log('[History] Thread not found (404) - this is normal for new threads, skipping history load');
+          // Don't set error message for 404 - it's expected for new threads
+        } else {
+          throw replayError; // Re-throw other errors
+        }
+      }
       setIsLoadingHistory(false);
       historyLoadingRef.current = false;
     } catch (error) {
       console.error('[History] Error loading conversation history:', error);
-      setMessageError(error.message || 'Failed to load conversation history');
+      // Only show error if it's not a 404 (404 is expected for new threads)
+      if (!error.message || !error.message.includes('404')) {
+        setMessageError(error.message || 'Failed to load conversation history');
+      }
       setIsLoadingHistory(false);
       historyLoadingRef.current = false;
     }
@@ -389,18 +405,22 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
 
   // Load history when workspace or threadId changes
   useEffect(() => {
-    console.log('[History] useEffect triggered, workspaceId:', workspaceId, 'threadId:', threadId);
+    console.log('[History] useEffect triggered, workspaceId:', workspaceId, 'threadId:', threadId, 'isStreaming:', isStreamingRef.current);
 
     // Guard: Only load if we have a workspaceId and a valid threadId (not '__default__')
-    if (!workspaceId || !threadId || threadId === '__default__' || historyLoadingRef.current) {
+    // Also skip if streaming is in progress (prevents race condition when thread ID changes during streaming)
+    if (!workspaceId || !threadId || threadId === '__default__' || historyLoadingRef.current || isStreamingRef.current) {
       console.log('[History] Skipping load:', {
         workspaceId,
         threadId,
         isLoading: historyLoadingRef.current,
+        isStreaming: isStreamingRef.current,
         reason: !workspaceId ? 'no workspaceId' :
           !threadId ? 'no threadId' :
             threadId === '__default__' ? 'default thread' :
-              'already loading'
+              historyLoadingRef.current ? 'already loading' :
+                isStreamingRef.current ? 'streaming in progress' :
+                  'unknown'
       });
       return;
     }
@@ -445,6 +465,9 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
 
     setIsLoading(true);
     setMessageError(null);
+    
+    // Mark streaming as in progress to prevent history loading during streaming
+    isStreamingRef.current = true;
 
     // Create assistant message placeholder
     const assistantMessageId = `assistant-${Date.now()}`;
@@ -495,6 +518,8 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
           }
 
           // Update thread_id if provided in the event
+          // Note: We don't trigger history loading here because isStreamingRef is still true
+          // History will be loaded after streaming completes (in the finally block)
           if (event.thread_id && event.thread_id !== threadId && event.thread_id !== '__default__') {
             setThreadId(event.thread_id);
             setStoredThreadId(workspaceId, event.thread_id);
@@ -611,21 +636,23 @@ export function useChatMessages(workspaceId, initialThreadId = null) {
         }))
       );
     } catch (err) {
-      console.error('Error sending message:', err);
-      setMessageError(err.message || 'Failed to send message');
-      setMessages((prev) =>
-        updateMessage(prev, assistantMessageId, (msg) => ({
-          ...msg,
-          content: msg.content || 'Failed to send message. Please try again.',
-          isStreaming: false,
-          error: true,
-        }))
-      );
-    } finally {
-      setIsLoading(false);
-      currentMessageRef.current = null;
-    }
-  };
+          console.error('Error sending message:', err);
+          setMessageError(err.message || 'Failed to send message');
+          setMessages((prev) =>
+            updateMessage(prev, assistantMessageId, (msg) => ({
+              ...msg,
+              content: msg.content || 'Failed to send message. Please try again.',
+              isStreaming: false,
+              error: true,
+            }))
+          );
+        } finally {
+          setIsLoading(false);
+          currentMessageRef.current = null;
+          // Mark streaming as complete - this will allow history loading to proceed if thread ID changed
+          isStreamingRef.current = false;
+        }
+      };
 
   return {
     messages,

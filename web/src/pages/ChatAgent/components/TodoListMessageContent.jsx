@@ -22,7 +22,7 @@ import { ListTodo, CheckCircle2, Circle, Loader2, ChevronDown, ChevronUp } from 
  * @param {number} props.pending - Number of pending todos
  */
 function TodoListMessageContent({ todos, total, completed, in_progress, pending }) {
-  const [isExpanded, setIsExpanded] = useState(true); // Expanded by default
+  const [isExpanded, setIsExpanded] = useState(false); // Folded by default (like reasoning and tool calls)
 
   console.log('[TodoListMessageContent] Rendering with props:', { todos, total, completed, in_progress, pending });
 
